@@ -19,6 +19,7 @@ def get_args():
     parser.add_argument("--sem_weight",type=int, default=1, help='semantic similarity')
     parser.add_argument("--style_weight", type=int, default=8, help='style')
     parser.add_argument("--max_steps", type=int, default=5)
+    parser.add_argument("--buffer_size", type=int, default=5)
     parser.add_argument('--dst', default='yelp', type=str,help='yelp | gyafc | amazon')
     parser.add_argument("--setting", type=str, default='zero-shot')
     parser.add_argument("--delim", type=str, default='curly_bracket')

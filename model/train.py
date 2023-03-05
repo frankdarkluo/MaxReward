@@ -13,12 +13,12 @@ import torch
 import torch.optim as optim
 import numpy as np
 from utils.replay_buffer import ReplayBuffer
-os.environ['CUDA_VISIBLE_DEVICES']='4'
+os.environ['CUDA_VISIBLE_DEVICES']='0'
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 tzone = tz.gettz()
 warnings.filterwarnings('ignore')
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-replay_buffer = ReplayBuffer(50)
+
 
 try:
     mp.set_start_method('spawn', force=True)
@@ -35,8 +35,9 @@ def main():
     MAX_LEN=args.max_len
     dst=args.dst
     optimizer = optim.Adam(dqn_model.parameters())
+    replay_buffer = ReplayBuffer(args.buffer_size)
 
-    of_dir = 'results/' + args.output_dir
+    of_dir = '../results/' + args.output_dir
     if not os.path.exists(of_dir):
         os.makedirs(of_dir)
 
@@ -70,14 +71,8 @@ def main():
     def compute_td_loss(batch_size):
         state, action, reward, next_state, done = replay_buffer.sample(batch_size)
 
-        state = torch.FloatTensor(np.float32(state)).to(device)
-        next_state = torch.FloatTensor(np.float32(next_state)).to(device)
-        action = torch.LongTensor(action).to(device)
-        reward = torch.FloatTensor(reward).to(device)
-        done = torch.FloatTensor(done).to(device)
-
-        q_values = dqn_model(state)
-        next_q_values = dqn_model(next_state)
+        q_values = dqn_model(state.tolist())
+        next_q_values = dqn_model(next_state.tolist())
 
         q_value = q_values.gather(1, action.unsqueeze(1)).squeeze(1)
         next_q_value = next_q_values.max(1)[0]
@@ -102,11 +97,11 @@ def main():
 
     with open(of_dir + output_file, 'w', encoding='utf8') as f, mp.Pool(processes=4) as pool:
         for idx in range(len(data)):
-            sent_data=data[idx]
+            sent_data=data[BSZ * idx:BSZ * (idx + 1)]
 
             #preprocessing
             ref_oris = []
-            for d in sent_data.split():
+            for d in sent_data:
                 for k, v in word_pairs.items():
                      d=d.strip().lower().replace(k, v)
                 ref_oris.append(d)
@@ -121,16 +116,19 @@ def main():
             max_seq_len=max(seq_len)
 
             # epsilon-exploration for choosing an action
-            state=dqn_model.text2emb(ref_olds)
-            epsilon=epsilon_by_frame(idx)
-            action=dqn_model.act(state,epsilon)
             all_rewards = []
-            max_reward = 0
+
             losses = []
+
+            #BSZ=1
+            state=ref_olds[0]
 
             # training Q-network
             for step in range(args.max_steps):
                 torch.cuda.empty_cache()
+
+                epsilon = epsilon_by_frame(idx)
+                action = dqn_model.act(state, epsilon)
 
                 # next_state, reward, done, _ = dqn_model.step(action)
                 ref_news = pool.starmap(editor.edit, [(ref_olds, [action] * BSZ, [positions] * BSZ, BSZ, MAX_LEN)
@@ -139,6 +137,7 @@ def main():
                     done=False
                 else: done=True
 
+                max_episode_reward = 0
 
                 for idx in range(len(ref_news)):
                     ref_new_batch_data = ref_news[idx]
@@ -147,27 +146,20 @@ def main():
 
                     next_state = ref_new_batch_data[index]
                     new_style_label = new_style_labels[index]
-                    reward=ref_new_score
+                    reward=ref_new_score.item()
 
+                    if ref_new_score>ref_old_score and reward> max_episode_reward:
+                        max_episode_reward = reward
+                        replay_buffer.push(state, action, max_episode_reward, next_state, done)
+                        state = next_state
 
-                    # TODO: will consider this early stopping mechanism later on
-                    # if ref_new_score>max_score and ref_new_score>ref_old_score:
-                    #     max_score=ref_new_score
-                    #     select_sent = ref_hat
-
-                    replay_buffer.push(state, action, reward, next_state, done)
-
-                    state = next_state
-
-
-                if done:
-                    state = []
-                    all_rewards.append(max_reward)
-                    max_reward = 0
 
                 if len(replay_buffer) > BSZ:
                     loss = compute_td_loss(BSZ)
                     losses.append(loss.data[0])
+
+                if done:
+                    all_rewards.append(max_episode_reward)
 
 if __name__ == '__main__':
     main()

@@ -45,10 +45,10 @@ class DQNAgent(nn.Module):
         self.ppl_max_len=self.model.config.n_positions
 
     def text2emb(self, sent):
-        encoded_input = self.tokenizer(sent, return_tensors='pt', padding=True, truncation=True, max_length=self.ppl_max_len)
-        output = self.model(**encoded_input.to(device), output_hidden_states=True)
-
-        return output
+        encoded_input = self.tokenizer(sent, return_tensors='pt', add_special_tokens=True, max_length=self.max_len)
+        input_ids = self.model(**encoded_input.to(device), output_hidden_states=True)
+        # same as self.model(torch.tensor(self.tokenizer.encode(sent[0])).unsqueeze(0).to(device))
+        return input_ids
 
 
     def style_scorer(self,ref_news):
@@ -193,12 +193,17 @@ class DQNAgent(nn.Module):
 
     def act(self, state, epsilon):
         if random.random() > epsilon:
-            state = torch.FloatTensor(state).unsqueeze(0).to(device)
             q_value = self.forward(state)
             action = q_value.max(1)[1].data[0]
         else:
             action = random.randrange(3) #.action_space.n=3, {deletion, insertion, replacement}
         return action
+
+    def forward(self, state):
+        input_ids=self.text2emb(state)
+        output=input_ids[0].sum() # it is a scalar value
+
+        return input_ids
 
 
 
