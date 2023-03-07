@@ -2,19 +2,23 @@ import math
 import os
 import logging
 from DQNSearchAgent import DQNAgent
+from Scorer import Scorer
 from editor import RobertaEditor
 from config import get_args
 import torch.multiprocessing as mp
 import warnings
-from model.nwp import set_seed, action_func
+from model.nwp import set_seed
 import datetime
 from dateutil import tz
 import torch
-os.environ['CUDA_VISIBLE_DEVICES']='4'
+import torch.optim as optim
+from utils.replay_buffer import ReplayBuffer
+os.environ['CUDA_VISIBLE_DEVICES']='0'
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
-tzone = tz.gettz()
+tzone = tz.gettz('America/Edmonton')
 warnings.filterwarnings('ignore')
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
 
 try:
     mp.set_start_method('spawn', force=True)
@@ -26,22 +30,26 @@ def main():
     args = get_args()
     set_seed(args.seed)
     editor = RobertaEditor(args).to(device)
-    sahc = DQNAgent(args, editor).to(device)
-    of_dir = 'results/' + args.output_dir
+    scorer= Scorer(args, editor).to(device)
+    dqn=DQNAgent(editor).to(device)
+
+    MAX_LEN=args.max_len
+    BSZ = args.bsz
+    dst=args.dst
+    optimizer = optim.Adam(dqn.parameters(),lr=args.lr)
+    replay_buffer = ReplayBuffer(args.buffer_size)
+
+    of_dir = '../results/' + args.output_dir
     if not os.path.exists(of_dir):
         os.makedirs(of_dir)
 
     if args.direction == '0-1': postfix = '0'
     else: postfix = '1'
 
-    filename='data/{}/test.{}'.format(args.dst,postfix)
+    filename='../data/{}/test.{}'.format(dst,postfix)
     with open(filename, 'r', encoding='utf8') as f:
         data = f.readlines()[:]
 
-    bsz = args.bsz
-    max_len=args.max_len
-    dst=args.dst
-    num_batches = math.ceil(len(data) / float(bsz))
     timestamp = datetime.datetime.now().astimezone(tzone).strftime('%Y-%m-%d_%H:%M:%S')
 
     output_file ='{}_{}_seed={}_{}_{}_{}.txt'.\
@@ -50,113 +58,104 @@ def main():
     print(log_txt_path)
     for handler in logging.root.handlers[:]:
         logging.root.removeHandler(handler)
-    logging.basicConfig(format='',
-                        filename=log_txt_path,
-                        filemode='w',
-                        datefmt='%m/%d/%Y %H:%M:%S',
-                        level=logging.INFO)
+    logging.basicConfig(format='',filename=log_txt_path,filemode='w',
+                        datefmt='%m/%d/%Y %H:%M:%S',level=logging.INFO)
 
     word_pairs ={"ca n't": "can not", "wo n't": "will not"}
     logging.info(args)
 
+    def compute_td_loss(buffer_size):
+        state, action, reward, next_state, done = replay_buffer.sample(buffer_size)
 
-    def print_es(a,b,c,d):
-        print("Early Stopping!")
-        logging.info("Early Stopping!")
-        print("{} steps, {}\ttotal score:{} {}".format(a + 1, b, c.item(),d.item()))
-        logging.info("{} steps, {}\ttotal score:{} {}".format(a + 1, b, c.item(),d.item()))
+        q_value = dqn(state.tolist())
+        next_q_values = dqn(next_state.tolist())
+
+        next_q_value = next_q_values.max(1)[0]
+
+        reward=torch.tensor(reward[0]).to(device)
+        expected_q_value = torch.max(reward, next_q_value.data * (1 - done[0]))
+
+        optimizer.zero_grad()
+        loss = (q_value - expected_q_value.data).pow(2).mean() # MSE loss
+        loss.backward()
+        optimizer.step()
+
+        return loss
 
 
+    epsilon_start = 1.0
+    epsilon_final = 0.01
+    epsilon_decay = 500
+
+    epsilon_by_frame = lambda frame_idx: epsilon_final + (epsilon_start - epsilon_final) * math.exp(
+        -1. * frame_idx / epsilon_decay)
+
+    # training
     with open(of_dir + output_file, 'w', encoding='utf8') as f, mp.Pool(processes=4) as pool:
-        for i in range(num_batches):
-            batch_data = data[bsz * i:bsz * (i + 1)]
-
+        for idx in range(len(data)):
+            print("\nidx:", idx)
+            print("------------------------------------")
+            sent_data=data[BSZ * idx:BSZ * (idx + 1)]
 
             #preprocessing
             ref_oris = []
-            for d in batch_data:
+            for d in sent_data:
                 for k, v in word_pairs.items():
                      d=d.strip().lower().replace(k, v)
                 ref_oris.append(d)
 
             ref_olds=ref_oris.copy()
-            state_vec, _ = editor.state_vec(ref_olds)
 
-            break_flag = False
-            max_score=0
-            step_max_score_list=[0]
+            state_vec, _ = editor.state_vec(ref_olds)
             seq_len=[len(line.split()) for line in ref_olds]
             max_seq_len=max(seq_len)
 
-            q_values=[]
+            # epsilon-exploration for choosing an action
+            all_rewards = []
+            losses = []
 
+            # BSZ=1
+            state=ref_olds[0]
+
+            # training Q-network
             for step in range(args.max_steps):
+
                 torch.cuda.empty_cache()
 
-                #get the whole candidate list
+                epsilon = epsilon_by_frame(idx)
+                action = dqn.act(state, epsilon)
 
-                ref_news = pool.starmap(editor.edit, [(ref_olds,[ops]*bsz,[positions]*bsz,bsz,max_len)
-                                                      for positions in range(max_seq_len) for ops in [0,1,2]])
+                ref_news = pool.starmap(editor.edit, [(ref_olds, [action] * BSZ, [positions] * BSZ, BSZ, MAX_LEN)
+                                                      for positions in range(max_seq_len)])
+                if step<args.max_steps:
+                    done=False
+                else: done=True
 
+                max_episode_reward = 0
 
+                # get reward
                 for idx in range(len(ref_news)):
-                    # torch.cuda.empty_cache()
-                    ref_new_batch_data=ref_news[idx]
-                    # action=action_func(idx)
+                    ref_new_batch_data = ref_news[idx]
+                    index, ref_old_score, ref_new_score, new_style_labels, _ \
+                        = scorer.acceptance_prob(ref_new_batch_data, ref_olds, ref_oris, state_vec)
 
-                    index, ref_old_score, ref_new_score, new_style_labels,_ \
-                        = sahc.acceptance_prob(ref_new_batch_data, ref_olds, ref_oris, state_vec)
+                    next_state = ref_new_batch_data[index]
+                    # new_style_label = new_style_labels[index]
+                    reward=ref_new_score.item()
 
-                    ref_hat = ref_new_batch_data[index]
-                    new_style_label=new_style_labels[index]
+                    # update replay buffer
+                    if ref_new_score>ref_old_score and reward> max_episode_reward:
+                        max_episode_reward = reward
+                        replay_buffer.push(state, action, max_episode_reward, next_state, done)
+                        state = next_state
 
-                    if ref_new_score>max_score and ref_new_score>ref_old_score:
-                        max_score=ref_new_score
-                        select_sent = ref_hat
+                # update Q-network
+                if len(replay_buffer) >= args.buffer_size:
+                    loss = compute_td_loss(args.buffer_size)
+                    losses.append(loss.data[0])
 
-                    # the style is changed!
-                    if args.early_stop == True:
-                        if (args.direction == '0-1' and new_style_label == 1) or \
-                                (args.direction == '1-0' and new_style_label == 0) :
-                            select_sent = ref_hat
-                            print_es(step,select_sent,ref_old_score,ref_new_score)
-                            break_flag = True
-                            break
+                if done:
+                    all_rewards.append(max_episode_reward)
 
-
-
-                if max_score>step_max_score_list[step]: #larger than previous max_score
-                    print("hill climbing!")
-                    logging.info("hill climbing!")
-
-                    cur_state = ref_olds[0]
-                    next_state = select_sent
-                    reward=max_score
-                    q_values.append((cur_state,next_state,reward,action,step))
-
-                    ref_olds = [select_sent]
-                    step_max_score_list.append(max_score.item())
-
-                else:
-                    print("don't climb, stop!")
-                    logging.info("don't climb, stop!")
-                    break_flag=True
-
-
-
-                if break_flag:
-                    break
-
-            if break_flag:
-                select_sent = select_sent
-
-            logging.info('climb {} steps, the selected sentence is: {}'.format(step+1,select_sent))
-            print('climb {} steps, the selected sentence is: {}'.format(step+1,select_sent))
-
-            logging.info('\n')
-            f.write(select_sent + '\n')
-            f.flush()
-
-if __name__=="__main__":
+if __name__ == '__main__':
     main()
-

@@ -1,4 +1,4 @@
-Prompt-Based Editing for Unsupervised Text Style Transfer
+Maximum Reward Learning with Text Editing
 =======
 
 ## Model downloading
