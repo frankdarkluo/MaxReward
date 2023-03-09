@@ -31,7 +31,7 @@ def main():
     set_seed(args.seed)
     editor = RobertaEditor(args).to(device)
     scorer= Scorer(args, editor).to(device)
-    dqn=DQNAgent(editor).to(device)
+    dqn=DQNAgent(editor,args.num_actions).to(device)
 
     MAX_LEN=args.max_len
     BSZ = args.bsz
@@ -65,15 +65,22 @@ def main():
     logging.info(args)
 
     def compute_td_loss(buffer_size):
-        state, action, reward, next_state, done = replay_buffer.sample(buffer_size)
+        states, actions, rewards, next_states, dones = replay_buffer.sample(buffer_size)
 
-        q_value = dqn(state.tolist())
-        next_q_values = dqn(next_state.tolist())
 
+        actions=torch.asarray(actions).to(device)
+        rewards=torch.asarray(rewards).to(device)
+        dones=torch.asarray(dones).to(device)
+
+        q_values = dqn(states.tolist())
+        q_value = q_values.gather(1, actions.unsqueeze(1)).squeeze(1)
+
+        next_q_values = dqn(next_states.tolist())
         next_q_value = next_q_values.max(1)[0]
+        reward=torch.tensor(rewards).to(device)
 
-        reward=torch.tensor(reward[0]).to(device)
-        expected_q_value = torch.max(reward, next_q_value.data * (1 - done[0]))
+        # Max DQN
+        expected_q_value = torch.max(reward, next_q_value.data * (1 - done))
 
         optimizer.zero_grad()
         loss = (q_value - expected_q_value.data).pow(2).mean() # MSE loss
@@ -141,21 +148,30 @@ def main():
 
                     next_state = ref_new_batch_data[index]
                     # new_style_label = new_style_labels[index]
-                    reward=ref_new_score.item()
+                    reward=ref_new_score.item()/1e2
 
                     # update replay buffer
-                    if ref_new_score>ref_old_score and reward> max_episode_reward:
+                    # if ref_new_score>ref_old_score and reward> max_episode_reward:
+                    if reward> max_episode_reward:
                         max_episode_reward = reward
-                        replay_buffer.push(state, action, max_episode_reward, next_state, done)
                         state = next_state
+
+                replay_buffer.push(state, action, max_episode_reward, next_state, done)
+                print("the best candidate in step {} is {}".format(step,state))
+
 
                 # update Q-network
                 if len(replay_buffer) >= args.buffer_size:
                     loss = compute_td_loss(args.buffer_size)
-                    losses.append(loss.data[0])
+                    losses.append(loss.item())
 
                 if done:
                     all_rewards.append(max_episode_reward)
+                    logging.info("the generated candidate is {}".format(state)) # update log
+                    f.write(state) # update the .txt
+                    f.flush()
+                    max_episode_reward = 0 # refresh
+
 
 if __name__ == '__main__':
     main()

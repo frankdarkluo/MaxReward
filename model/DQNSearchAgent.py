@@ -4,8 +4,13 @@ import numpy as np
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 import random
 
+
+
+
+
+
 class DQNAgent(nn.Module):
-    def __init__(self, editor,input=None,num_actions=None):
+    def __init__(self, editor,num_actions=None,input=None):
         super(DQNAgent,self).__init__()
         self.max_len=editor.max_len
         self.model=editor.model
@@ -15,12 +20,12 @@ class DQNAgent(nn.Module):
 
         self.input_dim = len(self.tokenizer.get_vocab())
         # Define a linear regression model
-        self.fc1 = torch.nn.Linear(self.input_dim, 256)
-        self.fc2 = torch.nn.Linear(256, 1)
+        self.fc1 = torch.nn.Linear(self.input_dim, 128)
+        self.fc2 = torch.nn.Linear(128, self.num_actions)
         self.dropout = torch.nn.Dropout(0.5)
 
     def text2emb(self, sent):
-        encoded_input = self.tokenizer(sent, return_tensors='pt', add_special_tokens=True, max_length=self.max_len, truncation=True)
+        encoded_input = self.tokenizer(sent, return_tensors='pt', add_special_tokens=True, max_length=self.max_len, truncation=True,padding=True)
         input_ids = self.model(**encoded_input.to(device), output_hidden_states=True)
         # same as self.model(torch.tensor(self.tokenizer.encode(sent[0])).unsqueeze(0).to(device))
         return input_ids
@@ -52,9 +57,9 @@ class DQNAgent(nn.Module):
     def act(self, state, epsilon):
         if random.random() > epsilon:
             q_value = self.forward(state)
-            action = q_value.max(1)[1].data[0]
+            action = q_value.max(1)[1].item()
         else:
-            action = random.randrange(3) #.action_space.n=3, {deletion, insertion, replacement}
+            action = random.randrange(self.num_actions) #.action_space.n=3, {deletion, insertion, replacement}
         return action
 
     def forward(self, state):
@@ -68,7 +73,7 @@ class DQNAgent(nn.Module):
         # Apply the linear regression model to obtain a tensor of shape (2, 1)
         x=x.view(-1, self.input_dim)
         x = torch.relu(self.dropout(self.fc1(x)))
-        output = self.fc2(x)
+        output = self.fc2(x) #action
 
         return output
 
