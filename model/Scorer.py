@@ -6,10 +6,11 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 from torch.nn import CrossEntropyLoss
 from transformers import logging
 logging.set_verbosity_error()
-from utils.examples import *
+from utils.constant import *
 sys.path.append("")
 from transformers import GPTNeoForCausalLM, GPT2LMHeadModel,AutoTokenizer,AutoModelForCausalLM
-from model.nwp import predict_next_word,pytorch_cos_sim
+from utils.helper import pytorch_cos_sim
+from nwp import predict_next_word
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 

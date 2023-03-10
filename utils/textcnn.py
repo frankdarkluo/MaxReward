@@ -13,10 +13,8 @@ from transformers import RobertaTokenizer
 import numpy as np
 
 sys.path.append("")
-from model_utils.helper import evaluate_sc
-from model_utils.dataset import SCIterator
-from model_utils.dataset import load_embedding
-from model_utils.optim import ScheduledOptim
+from utils.helper import evaluate_sc, ScheduledOptim
+from utils.dataset import SCIterator, load_embedding
 
 filter_sizes = [1, 2, 3, 4, 5]
 num_filters = [128, 128, 128, 128, 128]

@@ -1,7 +1,7 @@
 import math
 import os
 import logging
-from DQNSearchAgent import DQNAgent
+from DQNSearchAgent import Agent
 from Scorer import Scorer
 from editor import RobertaEditor
 from config import get_args
@@ -11,8 +11,8 @@ from model.nwp import set_seed
 import datetime
 from dateutil import tz
 import torch
-import torch.optim as optim
-from utils.replay_buffer import ReplayBuffer
+
+from utils.helper import plot
 os.environ['CUDA_VISIBLE_DEVICES']='0'
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 tzone = tz.gettz('America/Edmonton')
@@ -31,13 +31,11 @@ def main():
     set_seed(args.seed)
     editor = RobertaEditor(args).to(device)
     scorer= Scorer(args, editor).to(device)
-    dqn=DQNAgent(editor,args.num_actions).to(device)
+    agent=Agent(editor,args)
 
     MAX_LEN=args.max_len
     BSZ = args.bsz
     dst=args.dst
-    optimizer = optim.Adam(dqn.parameters(),lr=args.lr)
-    replay_buffer = ReplayBuffer(args.buffer_size)
 
     of_dir = '../results/' + args.output_dir
     if not os.path.exists(of_dir):
@@ -63,32 +61,6 @@ def main():
 
     word_pairs ={"ca n't": "can not", "wo n't": "will not"}
     logging.info(args)
-
-    def compute_td_loss(buffer_size):
-        states, actions, rewards, next_states, dones = replay_buffer.sample(buffer_size)
-
-
-        actions=torch.asarray(actions).to(device)
-        rewards=torch.asarray(rewards).to(device)
-        dones=torch.asarray(dones).to(device)
-
-        q_values = dqn(states.tolist())
-        q_value = q_values.gather(1, actions.unsqueeze(1)).squeeze(1)
-
-        next_q_values = dqn(next_states.tolist())
-        next_q_value = next_q_values.max(1)[0]
-        reward=torch.tensor(rewards).to(device)
-
-        # Max DQN
-        expected_q_value = torch.max(reward, next_q_value.data * (1 - done))
-
-        optimizer.zero_grad()
-        loss = (q_value - expected_q_value.data).pow(2).mean() # MSE loss
-        loss.backward()
-        optimizer.step()
-
-        return loss
-
 
     epsilon_start = 1.0
     epsilon_final = 0.01
@@ -130,7 +102,7 @@ def main():
                 torch.cuda.empty_cache()
 
                 epsilon = epsilon_by_frame(idx)
-                action = dqn.act(state, epsilon)
+                action = agent.act(state, epsilon)
 
                 ref_news = pool.starmap(editor.edit, [(ref_olds, [action] * BSZ, [positions] * BSZ, BSZ, MAX_LEN)
                                                       for positions in range(max_seq_len)])
@@ -156,13 +128,14 @@ def main():
                         max_episode_reward = reward
                         state = next_state
 
-                replay_buffer.push(state, action, max_episode_reward, next_state, done)
+                agent.replay_buffer.push(state, action, max_episode_reward, next_state, done)
                 print("the best candidate in step {} is {}".format(step,state))
 
 
                 # update Q-network
-                if len(replay_buffer) >= args.buffer_size:
-                    loss = compute_td_loss(args.buffer_size)
+                if len(agent.replay_buffer) >= args.buffer_size:
+                    loss = agent.compute_td_loss()
+                    print("loss is {}".format(str(loss.item())))
                     losses.append(loss.item())
 
                 if done:
@@ -171,6 +144,9 @@ def main():
                     f.write(state) # update the .txt
                     f.flush()
                     max_episode_reward = 0 # refresh
+
+            if idx % 100 == 0:
+                plot(idx, all_rewards, losses)
 
 
 if __name__ == '__main__':

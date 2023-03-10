@@ -7,11 +7,6 @@ args=get_args()
 stopwords.words('english')
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-positive_word_lst=['positive','good','better','well']
-negative_word_lst=['negative','bad','worse','depressed']
-formal_word_lst=['formal']
-informal_word_lst=['informal']
-
 def set_seed(seed):
     random.seed(seed)
     np.random.seed(seed)
@@ -24,15 +19,6 @@ def softmax(x):
     exp_x = torch.exp(x)
     softmax_x = exp_x / torch.sum(exp_x)
     return softmax_x
-
-def action_func(idx):
-    if idx%3==0:
-        act='replace'
-    elif idx%3==1:
-        act='insert'
-    else:
-        act='delete'
-    return act
 
 
 def predict_next_word(model,tokenizer,input_text,direction):
@@ -109,28 +95,3 @@ def predict_next_word(model,tokenizer,input_text,direction):
         else: labels.append(2) # 'neutral'
 
     return output_prob, labels
-
-def pytorch_cos_sim(a, b):
-    """
-    Computes the cosine similarity cos_sim(a[i], b[j]) for all i and j.
-    :return: Matrix with res[i][j]  = cos_sim(a[i], b[j])
-    """
-    return cos_sim(a, b)
-
-def cos_sim(a, b):
-    """
-    Computes the cosine similarity cos_sim(a[i], b[j]) for all i and j.
-    :return: Matrix with res[i][j]  = cos_sim(a[i], b[j])
-    """
-    if not isinstance(a, torch.Tensor):
-        a = torch.tensor(a)
-    if not isinstance(b, torch.Tensor):
-        b = torch.tensor(b)
-    if len(a.shape) == 1:
-        a = a.unsqueeze(0)
-    if len(b.shape) == 1:
-        b = b.unsqueeze(0)
-
-    a_norm = torch.nn.functional.normalize(a, p=2, dim=1)
-    b_norm = torch.nn.functional.normalize(b, p=2, dim=1)
-    return torch.mm(a_norm, b_norm.transpose(0, 1))
