@@ -31,7 +31,7 @@ def main():
     set_seed(args.seed)
     editor = RobertaEditor(args).to(device)
     scorer= Scorer(args, editor).to(device)
-    agent=Agent(editor,args)
+    agent=Agent(editor,args).to(device)
 
     MAX_LEN=args.max_len
     BSZ = args.bsz
@@ -104,7 +104,7 @@ def main():
                 epsilon = epsilon_by_frame(idx)
                 action = agent.act(state, epsilon)
 
-                ref_news = pool.starmap(editor.edit, [(ref_olds, [action] * BSZ, [positions] * BSZ, BSZ, MAX_LEN)
+                ref_news = pool.starmap(editor.edit, [([state], [action] * BSZ, [positions] * BSZ, BSZ, MAX_LEN)
                                                       for positions in range(max_seq_len)])
                 if step<args.max_steps:
                     done=False
@@ -118,17 +118,21 @@ def main():
                     index, ref_old_score, ref_new_score, new_style_labels, _ \
                         = scorer.acceptance_prob(ref_new_batch_data, ref_olds, ref_oris, state_vec)
 
-                    next_state = ref_new_batch_data[index]
+                    temp_next_state = ref_new_batch_data[index]
                     # new_style_label = new_style_labels[index]
-                    reward=ref_new_score.item()/1e2
+                    reward=ref_new_score.item()/1e5
 
                     # update replay buffer
                     # if ref_new_score>ref_old_score and reward> max_episode_reward:
                     if reward> max_episode_reward:
                         max_episode_reward = reward
-                        state = next_state
+                        next_state = temp_next_state
 
+                #update replay buffer
                 agent.replay_buffer.push(state, action, max_episode_reward, next_state, done)
+
+                # update state
+                state=next_state
                 print("the best candidate in step {} is {}".format(step,state))
 
 

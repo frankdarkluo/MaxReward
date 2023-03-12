@@ -35,9 +35,9 @@ class DQN(nn.Module):
         return x
 
 
-class Agent():
+class Agent(nn.Module):
     def __init__(self, editor,args,num_actions=3):
-
+        super(Agent, self).__init__()  ## calls __init__ method of nn.Module class
         self.max_len=editor.max_len
         self.model=editor.model
         self.tokenizer=editor.tokenizer
