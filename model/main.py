@@ -11,15 +11,18 @@ from model.nwp import set_seed
 import datetime
 from dateutil import tz
 import torch
-
+from torch.utils.data import DataLoader
 from utils.helper import plot
+from utils.dataset import TSTDataset
+from tqdm import tqdm
 os.environ['CUDA_VISIBLE_DEVICES']='0'
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 tzone = tz.gettz('America/Edmonton')
 warnings.filterwarnings('ignore')
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+import time
 
-
+start_time=time.time()
 try:
     mp.set_start_method('spawn', force=True)
     print("spawned")
@@ -41,13 +44,6 @@ def main():
     if not os.path.exists(of_dir):
         os.makedirs(of_dir)
 
-    if args.direction == '0-1': postfix = '0'
-    else: postfix = '1'
-
-    filename='../data/{}/test.{}'.format(dst,postfix)
-    with open(filename, 'r', encoding='utf8') as f:
-        data = f.readlines()[:]
-
     timestamp = datetime.datetime.now().astimezone(tzone).strftime('%Y-%m-%d_%H:%M:%S')
 
     output_file ='{}_{}_seed={}_{}_{}_{}.txt'.\
@@ -58,8 +54,6 @@ def main():
         logging.root.removeHandler(handler)
     logging.basicConfig(format='',filename=log_txt_path,filemode='w',
                         datefmt='%m/%d/%Y %H:%M:%S',level=logging.INFO)
-
-    word_pairs ={"ca n't": "can not", "wo n't": "will not"}
     logging.info(args)
 
     epsilon_start = 1.0
@@ -69,32 +63,36 @@ def main():
     epsilon_by_frame = lambda frame_idx: epsilon_final + (epsilon_start - epsilon_final) * math.exp(
         -1. * frame_idx / epsilon_decay)
 
+    train_dataset=TSTDataset(args,'train')
+    train_data=DataLoader(train_dataset,
+                          batch_size=BSZ,
+                          shuffle=True,
+                          num_workers=4,
+                          pin_memory=True)
+    # val_data=TSTDataset(data)
+    # test_data=TSTDataset(data)
+
+    end_time=time.time()
+    elapsed_time = end_time - start_time
+
+    print('代码执行时间：{:.6f}秒'.format(elapsed_time))
+
     # training
     with open(of_dir + output_file, 'w', encoding='utf8') as f, mp.Pool(processes=4) as pool:
-        for idx in range(len(data)):
-            print("\nidx:", idx)
-            print("------------------------------------")
-            sent_data=data[BSZ * idx:BSZ * (idx + 1)]
+        for idx,batch_data in enumerate(train_data):
 
-            #preprocessing
-            ref_oris = []
-            for d in sent_data:
-                for k, v in word_pairs.items():
-                     d=d.strip().lower().replace(k, v)
-                ref_oris.append(d)
+            ref_oris=ref_olds=batch_data
+            batch_state_vec, _ = editor.state_vec(batch_data)
 
-            ref_olds=ref_oris.copy()
-
-            state_vec, _ = editor.state_vec(ref_olds)
-            seq_len=[len(line.split()) for line in ref_olds]
+            seq_len=[len(line.split()) for line in batch_data]
             max_seq_len=max(seq_len)
 
             # epsilon-exploration for choosing an action
             all_rewards = []
             losses = []
 
-            # BSZ=1
-            state=ref_olds[0]
+
+            state=ref_olds
 
             # training Q-network
             for step in range(args.max_steps):
@@ -104,35 +102,44 @@ def main():
                 epsilon = epsilon_by_frame(idx)
                 action = agent.act(state, epsilon)
 
-                ref_news = pool.starmap(editor.edit, [([state], [action] * BSZ, [positions] * BSZ, BSZ, MAX_LEN)
-                                                      for positions in range(max_seq_len)])
-                if step<args.max_steps:
+                ref_news = pool.starmap(editor.edit, [(state, [action] * BSZ, [positions] * BSZ, BSZ, MAX_LEN) for positions in range(max_seq_len)])
+                if step<args.max_steps-1:
                     done=False
-                else: done=True
+                else: done=True # meaning when step=4, done=True
 
-                max_episode_reward = 0
+                max_episode_reward = -1 * float("inf")
+                next_state=None
 
                 # get reward
                 for idx in range(len(ref_news)):
                     ref_new_batch_data = ref_news[idx]
-                    index, ref_old_score, ref_new_score, new_style_labels, _ \
-                        = scorer.acceptance_prob(ref_new_batch_data, ref_olds, ref_oris, state_vec)
 
-                    temp_next_state = ref_new_batch_data[index]
-                    # new_style_label = new_style_labels[index]
-                    reward=ref_new_score.item()/1e5
+                    results = pool.starmap_async(scorer.acceptance_prob,
+                                           [(ref_new_batch_data[i], [ref_olds[i]], [ref_oris[i]], [batch_state_vec[i]])
+                                            for i in range(len(ref_new_batch_data))])
+                    results = results.get()
+                    index, ref_old_score, ref_new_score, new_style_labels, _ = zip(*results)
+                    # index, ref_old_score, ref_new_score, new_style_labels, _ \
+                    #     = scorer.acceptance_prob(ref_new_batch_data, ref_olds, ref_oris, state_vec)
+
+
+                    temp_next_state = [ref_new_batch_data[i][index[i]] for i in range(BSZ)]
+                    reward=list(ref_new_score)
 
                     # update replay buffer
                     # if ref_new_score>ref_old_score and reward> max_episode_reward:
-                    if reward> max_episode_reward:
-                        max_episode_reward = reward
-                        next_state = temp_next_state
+                    for i in range(BSZ):
+                        if reward[i]> max_episode_reward[i]:
+                            max_episode_reward[i] = reward[i]
+                            next_state[i] = temp_next_state[i]
+
 
                 #update replay buffer
-                agent.replay_buffer.push(state, action, max_episode_reward, next_state, done)
+                for i in range(BSZ):
+                    agent.replay_buffer.push(state[i], action[i], max_episode_reward[i], next_state[i], done)
 
                 # update state
-                state=next_state
+                state[i]=next_state[i]
                 print("the best candidate in step {} is {}".format(step,state))
 
 
@@ -144,10 +151,10 @@ def main():
 
                 if done:
                     all_rewards.append(max_episode_reward)
-                    logging.info("the generated candidate is {}".format(state)) # update log
+                    logging.info("the generated candidate is {}: ".format(state)) # update log
                     f.write(state) # update the .txt
                     f.flush()
-                    max_episode_reward = 0 # refresh
+                    max_episode_reward = -1 * float("inf") # refresh
 
             if idx % 100 == 0:
                 plot(idx, all_rewards, losses)

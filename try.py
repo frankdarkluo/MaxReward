@@ -1,61 +1,24 @@
-import torch.nn as nn
-import torch.optim as optim
+my_list = [[1, 2, 3], [4, 5], [6, 7, 8], [9, 10], [11, 12, 13], [14, 15, 16]]
 
-import torch
-from transformers import GPT2Model, GPT2Tokenizer
+# function to group similar sublists together
+def group_similar_sublists(lst):
+    result = []
+    for sublst in lst:
+        found_similar = False
+        for idx, existing_sublst in enumerate(result):
+            if set(sublst) == set(existing_sublst):
+                result[idx].extend(sublst)
+                found_similar = True
+                break
+        if not found_similar:
+            result.append(sublst)
+    return result
 
-# Load pre-trained model and tokenizer
-model_name = 'gpt2'
-tokenizer = GPT2Tokenizer.from_pretrained(model_name)
-model = GPT2Model.from_pretrained(model_name)
+# split sublists and group together similar sublists
+split_sublists = [sublst for lst in my_list for sublst in lst]
+grouped_sublists = group_similar_sublists(split_sublists)
 
-# Define input sequence
-input_sequence = "This is an example sentence."
-
-# Tokenize input sequence
-inputs = tokenizer(input_sequence, return_tensors='pt')
-
-# Generate embeddings for input sequence
-outputs = model(**inputs)
-
-# Extract last hidden state
-last_hidden_state = outputs.last_hidden_state
-
-print(last_hidden_state.shape)  # Output: torch.Size([1, 6, 768])
-
-
-# Define neural network
-class Net(nn.Module):
-    def __init__(self):
-        super(Net, self).__init__()
-        self.fc1 = nn.Linear(50257, 256)
-        self.fc2 = nn.Linear(256, 1)
-
-    def forward(self, x):
-        x = x.view(-1, 50257)
-        x = torch.relu(self.fc1(x))
-        x = self.fc2(x)
-        return x
-
-# Define training data
-X = last_hidden_state
-y = torch.tensor([1, 2]).view(-1, 1)
-
-# Define loss function and optimizer
-criterion = nn.MSELoss()
-net=Net()
-optimizer = optim.SGD(net.parameters(), lr=0.001)
-
-# Train neural network
-net = Net()
-for epoch in range(1000):
-    optimizer.zero_grad()
-    output = net(X)
-    loss = criterion(output, y)
-    loss.backward()
-    optimizer.step()
-
-# Test neural network
-with torch.no_grad():
-    test_output = net(X)
-    print(test_output)
+# print results
+print("Original list: ", my_list)
+print("Split sublists: ", split_sublists)
+print("Grouped sublists: ", grouped_sublists)

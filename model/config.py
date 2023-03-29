@@ -12,7 +12,7 @@ def get_args():
     parser.add_argument('--max_key', default=10, type=float)
     parser.add_argument('--max_key_rate', default=0.5, type=float)
     parser.add_argument('--style_mode', default='plm', type=str,help='plm | pipeline | textcnn')
-    parser.add_argument('--plm_name',default='../../EleutherAI/gpt-j-6B',type=str)
+    parser.add_argument('--plm_name',default='../../EleutherAI/gpt-neo-125M',type=str)
     parser.add_argument('--topk', default=50, type=int,help="top-k words in masked out word prediction")
     parser.add_argument("--direction", type=str, default='0-1',help='0-1 | 1-0')
     parser.add_argument("--fluency_weight", type=int, default=2, help='fluency')
@@ -27,7 +27,7 @@ def get_args():
     parser.add_argument("--setting", type=str, default='zero-shot')
     parser.add_argument("--delim", type=str, default='curly_bracket')
     parser.add_argument("--prompt_setting", type=str, default='classification_v2')
-    parser.add_argument("--bsz",type=int,default=1,help="batch size")
+    parser.add_argument("--bsz",type=int,default=4,help="batch size")
     parser.add_argument("--gamma", type=int, default=0.99, help="discount factor")
 
     ## Ablation Study:

@@ -3,10 +3,29 @@
 import random
 random.seed(1024)
 import numpy as np
-
 import torch
 import torch.utils.data
 
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+class TSTDataset(torch.utils.data.Dataset):
+    def __init__(self,args,prefix):
+        if args.direction == '0-1':
+            postfix = '0'
+        else:
+            postfix = '1'
+
+        filename = '../data/{}/{}.{}'.format(args.dst,prefix,postfix)
+        with open(filename, 'r', encoding='utf8') as f:
+            data = f.readlines()[:]
+
+        self._data = [item.strip() for item in data]
+
+    def __len__(self):
+        return len(self._data)
+
+    def __getitem__(self, idx):
+        return self._data[idx]
 
 def read_data(dataset, style, max_len, prefix,
               tokenizer, domain=0, ratio=1.0):

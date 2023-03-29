@@ -33,7 +33,7 @@ class RobertaEditor(nn.Module):
             index = [idx for idx, masked_input in enumerate(masked_inputs) if '<mask>' in masked_input]
             mask_inputs=array_masked_inputs[index]
             mask_outputs=self.generate(mask_inputs.tolist(),max_len)
-            output_lists = mask_outputs[0]
+            output_lists = mask_outputs
         else: # deletion, no mask
             output_lists=masked_inputs
 
@@ -68,24 +68,23 @@ class RobertaEditor(nn.Module):
             #mask_words=mask_words_list
             sent_list=[]
             for mask_word in mask_words:
-                split_text=input_texts[idx].split()
-                mask_word_index=mask_token_index-1
+                # split_text=input_texts[idx].split()
+                # mask_word_index=mask_token_index-1
                 #in case the word is overlapped with pre or post word.
 
-                if 0<mask_word_index<len(split_text)-1 and \
-                        (split_text[mask_word_index-1]==mask_word or split_text[mask_word_index+1]==mask_word): continue
-                elif mask_word_index==0 and split_text[mask_word_index + 1] == mask_word: continue
-                elif mask_word_index==len(split_text)-1 and split_text[mask_word_index - 1] == mask_word: continue
-                else:
-                    cand_sent = input_texts[idx].replace("<mask>", mask_word.strip()).lower()
-                    cand_sent = ' '.join(cand_sent.split()[:max_len])
-                    sent_list.append(cand_sent)
+                # if 0<mask_word_index<len(split_text)-1 and \
+                #         (split_text[mask_word_index-1]==mask_word or split_text[mask_word_index+1]==mask_word): continue
+                # elif mask_word_index==0 and split_text[mask_word_index + 1] == mask_word: continue
+                # elif mask_word_index==len(split_text)-1 and split_text[mask_word_index - 1] == mask_word: continue
+                # else:
+                cand_sent = input_texts[idx].replace("<mask>", mask_word.strip()).lower()
+                cand_sent = ' '.join(cand_sent.split()[:max_len])
+                sent_list.append(cand_sent)
 
             total_sent_list.append(sent_list)
 
             if total_sent_list==[[]]:
                 print(input_texts[idx])
-
 
         return total_sent_list
 

@@ -132,7 +132,7 @@ class Agent(nn.Module):
         q_value = q_values.gather(1, actions.unsqueeze(1)).squeeze(1)
 
         with torch.no_grad():
-            next_q_values = self.policy_net(self.text2emb(next_states.tolist()))
+            next_q_values = self.target_net(self.text2emb(next_states.tolist()))
             next_q_value = next_q_values.max(1)[0]
 
         reward=torch.tensor(rewards).to(device)

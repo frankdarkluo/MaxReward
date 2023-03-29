@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import sys
 import os
+import numpy as np
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 from torch.nn import CrossEntropyLoss
 from transformers import logging
@@ -152,9 +153,20 @@ class Scorer(nn.Module):
         ref_new_score_index=torch.argmax(ref_new_scores)
         ref_new_score=torch.max(ref_new_scores)
 
-        if ref_new_score - ref_old_score > 0:
+        seq_old=len(input_olds[0].split())
+        seq_new=len(input_news[0].split())
+
+        # V_old=torch.log(torch.maximum(torch.pow(ref_old_score, 1.0 / seq_old), torch.tensor(1e-200))).item()
+        # V_new=torch.log(torch.maximum(torch.pow(ref_new_score, 1.0 / seq_new), torch.tensor(1e-200))).item()
+        V_old = np.log(np.maximum(np.power(ref_old_score.cpu().detach().numpy(), 1.0 / seq_old), 1e-200))
+        V_new = np.log(np.maximum(np.power(ref_new_score.cpu().detach().numpy(), 1.0 / seq_old), 1e-200))
+
+        # Scale the score to be [-3,3]
+        V_old, V_new = V_old * 3, V_new * 3
+
+        if V_new - V_old > 0:
             accept_hat = [1]
         else:
             accept_hat = [0]
 
-        return ref_new_score_index,ref_old_score,ref_new_score,new_style_labels, accept_hat
+        return ref_new_score_index,V_old,V_new,new_style_labels, accept_hat
