@@ -26,18 +26,13 @@ class RobertaEditor(nn.Module):
         print("Editor built")
 
     def edit(self, inputs, ops, positions,bsz,max_len=None):
-        masked_inputs = [self.ops_map[op](inp, position) for inp, op, position, in zip(inputs, ops, positions)]
-        array_masked_inputs = np.array(masked_inputs)
-
+        # mask_inputs=[]
+        mask_inputs=[self.ops_map[op](inp, position) if position < len(inp.split()) else "" for inp, op, position in zip(inputs, ops, positions)]
         if ops[0] < 2:  # replacement or insertion, have a mask
-            index = [idx for idx, masked_input in enumerate(masked_inputs) if '<mask>' in masked_input]
-            mask_inputs=array_masked_inputs[index]
-            mask_outputs=self.generate(mask_inputs.tolist(),max_len)
-            output_lists = mask_outputs
-        else: # deletion, no mask
-            output_lists=masked_inputs
-
-        return output_lists
+            mask_outputs=self.generate(mask_inputs, max_len)
+            return mask_outputs
+        else:
+            return mask_inputs
 
 
     def generate(self, input_texts, max_len):
@@ -46,7 +41,9 @@ class RobertaEditor(nn.Module):
         rbt_sent_list, _ = self.plm_token(input_texts,max_len)
 
         for idx,rbt_sent in enumerate(rbt_sent_list):
-
+            if rbt_sent==['<s>', '</s>']:
+                total_sent_list.append([""])
+                continue
             ids = torch.tensor([self.tokenizer.convert_tokens_to_ids(rbt_sent)]).to(device)
             mask_token_index = (ids==self.tokenizer.mask_token_id).long().max(dim=1).indices
             token_logits = self.model(ids).logits
@@ -83,8 +80,8 @@ class RobertaEditor(nn.Module):
 
             total_sent_list.append(sent_list)
 
-            if total_sent_list==[[]]:
-                print(input_texts[idx])
+            # if total_sent_list==[[]]:
+            #     print(input_texts[idx])
 
         return total_sent_list
 

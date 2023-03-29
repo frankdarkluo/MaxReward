@@ -146,27 +146,25 @@ class Scorer(nn.Module):
 
         return total_scores.squeeze(),style_scores.squeeze(), style_labels
 
-    def acceptance_prob(self, input_news, input_olds,ref_oris,state_vec):
-        ref_old_score, old_style_score, _ = self.scorer(input_olds, ref_oris, state_vec)
-        ref_new_scores,new_style_scores,new_style_labels=self.scorer(input_news,ref_oris,state_vec)
-
-        ref_new_score_index=torch.argmax(ref_new_scores)
-        ref_new_score=torch.max(ref_new_scores)
-
-        seq_old=len(input_olds[0].split())
-        seq_new=len(input_news[0].split())
-
-        # V_old=torch.log(torch.maximum(torch.pow(ref_old_score, 1.0 / seq_old), torch.tensor(1e-200))).item()
-        # V_new=torch.log(torch.maximum(torch.pow(ref_new_score, 1.0 / seq_new), torch.tensor(1e-200))).item()
-        V_old = np.log(np.maximum(np.power(ref_old_score.cpu().detach().numpy(), 1.0 / seq_old), 1e-200))
-        V_new = np.log(np.maximum(np.power(ref_new_score.cpu().detach().numpy(), 1.0 / seq_old), 1e-200))
-
-        # Scale the score to be [-3,3]
-        V_old, V_new = V_old * 3, V_new * 3
-
-        if V_new - V_old > 0:
-            accept_hat = [1]
+    def acceptance_prob(self, input_news, input_olds,input_oris,state_vec):
+        if input_news==['']:
+            ref_new_score_index, V_old, V_new, new_style_labels=None
         else:
-            accept_hat = [0]
+            ref_old_score, old_style_score, _ = self.scorer(input_olds, input_oris, state_vec)
+            ref_new_scores,new_style_scores,new_style_labels=self.scorer(input_news,input_oris,state_vec)
 
-        return ref_new_score_index,V_old,V_new,new_style_labels, accept_hat
+            ref_new_score_index=torch.argmax(ref_new_scores)
+            ref_new_score=torch.max(ref_new_scores)
+
+            seq_old=len(input_olds[0].split())
+            seq_new=len(input_news[0].split())
+
+            # V_old=torch.log(torch.maximum(torch.pow(ref_old_score, 1.0 / seq_old), torch.tensor(1e-200))).item()
+            # V_new=torch.log(torch.maximum(torch.pow(ref_new_score, 1.0 / seq_new), torch.tensor(1e-200))).item()
+            V_old = np.log(np.maximum(np.power(ref_old_score.cpu().detach().numpy(), 1.0 / seq_old), 1e-200))
+            V_new = np.log(np.maximum(np.power(ref_new_score.cpu().detach().numpy(), 1.0 / seq_old), 1e-200))
+
+            # Scale the score to be [-3,3]
+            V_old, V_new = V_old * 3, V_new * 3
+
+        return ref_new_score_index,V_old,V_new,new_style_labels

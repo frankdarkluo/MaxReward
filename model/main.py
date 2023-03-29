@@ -48,13 +48,13 @@ def main():
 
     output_file ='{}_{}_seed={}_{}_{}_{}.txt'.\
         format(timestamp,dst,str(args.seed),args.style_mode,str(args.style_weight),args.direction)
-    log_txt_path=os.path.join(of_dir, output_file.split('.txt')[0] + '.log')
-    print(log_txt_path)
-    for handler in logging.root.handlers[:]:
-        logging.root.removeHandler(handler)
-    logging.basicConfig(format='',filename=log_txt_path,filemode='w',
-                        datefmt='%m/%d/%Y %H:%M:%S',level=logging.INFO)
-    logging.info(args)
+    # log_txt_path=os.path.join(of_dir, output_file.split('.txt')[0] + '.log')
+    # print(log_txt_path)
+    # for handler in logging.root.handlers[:]:
+    #     logging.root.removeHandler(handler)
+    # logging.basicConfig(format='',filename=log_txt_path,filemode='w',
+    #                     datefmt='%m/%d/%Y %H:%M:%S',level=logging.INFO)
+    # logging.info(args)
 
     epsilon_start = 1.0
     epsilon_final = 0.01
@@ -107,7 +107,7 @@ def main():
                     done=False
                 else: done=True # meaning when step=4, done=True
 
-                max_episode_reward = -1 * float("inf")
+                max_episode_reward = [-1 * float("inf")]*BSZ
                 next_state=None
 
                 # get reward
@@ -118,10 +118,9 @@ def main():
                                            [(ref_new_batch_data[i], [ref_olds[i]], [ref_oris[i]], [batch_state_vec[i]])
                                             for i in range(len(ref_new_batch_data))])
                     results = results.get()
-                    index, ref_old_score, ref_new_score, new_style_labels, _ = zip(*results)
+                    index, ref_old_score, ref_new_score, new_style_labels = zip(*results)
                     # index, ref_old_score, ref_new_score, new_style_labels, _ \
                     #     = scorer.acceptance_prob(ref_new_batch_data, ref_olds, ref_oris, state_vec)
-
 
                     temp_next_state = [ref_new_batch_data[i][index[i]] for i in range(BSZ)]
                     reward=list(ref_new_score)

@@ -13,7 +13,7 @@ def get_args():
     parser.add_argument('--max_key_rate', default=0.5, type=float)
     parser.add_argument('--style_mode', default='plm', type=str,help='plm | pipeline | textcnn')
     parser.add_argument('--plm_name',default='../../EleutherAI/gpt-neo-125M',type=str)
-    parser.add_argument('--topk', default=50, type=int,help="top-k words in masked out word prediction")
+    parser.add_argument('--topk', default=30, type=int,help="top-k words in masked out word prediction")
     parser.add_argument("--direction", type=str, default='0-1',help='0-1 | 1-0')
     parser.add_argument("--fluency_weight", type=int, default=2, help='fluency')
     parser.add_argument("--sem_weight",type=int, default=3, help='semantic similarity')
