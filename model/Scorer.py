@@ -88,7 +88,8 @@ class Scorer(nn.Module):
 
     def keyword_sim(self,ref_new_embeds,ref_old_embeds,state_vec=None):
         e = 1e-5
-        repeat_num=ref_new_embeds.size(0)
+        if ref_new_embeds.size(0)==ref_old_embeds.size(0): repeat_num=1
+        else: repeat_num=ref_new_embeds.size(0)
         emb1 = ref_new_embeds.permute(0, 2, 1)
         emb2 = ref_old_embeds.repeat(repeat_num,1,1)
         emb_mat = torch.bmm(emb2, emb1)
@@ -146,25 +147,18 @@ class Scorer(nn.Module):
 
         return total_scores.squeeze(),style_scores.squeeze(), style_labels
 
-    def acceptance_prob(self, input_news, input_olds,input_oris,state_vec):
-        if input_news==['']:
-            ref_new_score_index, V_old, V_new, new_style_labels=None
-        else:
-            ref_old_score, old_style_score, _ = self.scorer(input_olds, input_oris, state_vec)
-            ref_new_scores,new_style_scores,new_style_labels=self.scorer(input_news,input_oris,state_vec)
+    def acceptance_prob(self, input_news, input_olds,state_vec):
+        _scores,style_scores,style_labels=self.scorer(input_news,input_olds,state_vec)
 
-            ref_new_score_index=torch.argmax(ref_new_scores)
-            ref_new_score=torch.max(ref_new_scores)
+        _score_index=torch.argmax(_scores)
+        _score=torch.max(_scores)
 
-            seq_old=len(input_olds[0].split())
-            seq_new=len(input_news[0].split())
+        _seq=len(input_news[0].split())
 
-            # V_old=torch.log(torch.maximum(torch.pow(ref_old_score, 1.0 / seq_old), torch.tensor(1e-200))).item()
-            # V_new=torch.log(torch.maximum(torch.pow(ref_new_score, 1.0 / seq_new), torch.tensor(1e-200))).item()
-            V_old = np.log(np.maximum(np.power(ref_old_score.cpu().detach().numpy(), 1.0 / seq_old), 1e-200))
-            V_new = np.log(np.maximum(np.power(ref_new_score.cpu().detach().numpy(), 1.0 / seq_old), 1e-200))
+        # V_score = np.log(np.maximum(np.power(_score.cpu().detach().numpy(), 1.0 /_seq), 1e-200))
+        V_score = torch.sigmoid(_score).cpu().detach().numpy()
 
-            # Scale the score to be [-3,3]
-            V_old, V_new = V_old * 3, V_new * 3
+        # Scale the score to be [-3,3]
+        V_score = V_score * 3
 
-        return ref_new_score_index,V_old,V_new,new_style_labels
+        return _score_index,V_score,style_labels

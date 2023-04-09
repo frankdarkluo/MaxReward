@@ -6,8 +6,11 @@ import RAKE
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 import nltk
 from utils.constant import stopwords
+import os
+os.environ["TOKENIZERS_PARALLELISM"] = "true"
 from transformers import logging
 logging.set_verbosity_error()
+special_tokens = ['_num_', "'s","'d","'m","'re","'ve","'ll","n't"]
 
 class RobertaEditor(nn.Module):
     def __init__(self, opt):
@@ -17,6 +20,8 @@ class RobertaEditor(nn.Module):
         self.model_dir='roberta-large'
         self.model = RobertaForMaskedLM.from_pretrained(self.model_dir, return_dict=True).to(device)
         self.tokenizer = RobertaTokenizer.from_pretrained(self.model_dir)
+        self.tokenizer.add_tokens(special_tokens)
+        self.model.resize_token_embeddings(len(self.tokenizer))
         print("running the model {}".format(self.model_dir))
 
         self.ops_map = [self.replace, self.insert, self.delete]
@@ -25,65 +30,57 @@ class RobertaEditor(nn.Module):
 
         print("Editor built")
 
-    def edit(self, inputs, ops, positions,bsz,max_len=None):
+    def edit(self, inputs, ops, positions):
         # mask_inputs=[]
         mask_inputs=[self.ops_map[op](inp, position) if position < len(inp.split()) else "" for inp, op, position in zip(inputs, ops, positions)]
         if ops[0] < 2:  # replacement or insertion, have a mask
-            mask_outputs=self.generate(mask_inputs, max_len)
+            index = [idx for idx, masked_input in enumerate(mask_inputs) if '<mask>' in masked_input]
+            mask_inputs = np.array(mask_inputs)[index]
+            mask_outputs=self.generate(mask_inputs.tolist())[0]
             return mask_outputs
         else:
             return mask_inputs
 
+    def generate(self, sents):
 
-    def generate(self, input_texts, max_len):
+        inputs = self.tokenizer.batch_encode_plus(sents, return_tensors="pt", padding=True,
+                                                  max_length=32, truncation=True)
+        mask_indices = (inputs.input_ids == self.tokenizer.mask_token_id).nonzero(as_tuple=True)[1]
 
-        total_sent_list = []
-        rbt_sent_list, _ = self.plm_token(input_texts,max_len)
+        # Send input tensors to device (GPU if available)
+        inputs = {key: value.to(device) for key, value in inputs.items()}
 
-        for idx,rbt_sent in enumerate(rbt_sent_list):
-            if rbt_sent==['<s>', '</s>']:
-                total_sent_list.append([""])
-                continue
-            ids = torch.tensor([self.tokenizer.convert_tokens_to_ids(rbt_sent)]).to(device)
-            mask_token_index = (ids==self.tokenizer.mask_token_id).long().max(dim=1).indices
-            token_logits = self.model(ids).logits
-            masked_token_logits = token_logits[0, mask_token_index, :]
+        with torch.no_grad():
+            outputs = self.model(**inputs)
+        logits = outputs.logits
 
-            mask_words_list = list(set(self.tokenizer.decode([token.item()]).lower().strip() for token in torch.topk(masked_token_logits, self.topk, dim=1).indices[0]))
+        mask_word_predictions = logits[torch.arange(len(sents)), mask_indices].topk(self.topk, dim=-1).indices.squeeze(-1)
+        mask_words_list = [self.tokenizer.batch_decode(pred) for pred in mask_word_predictions]
 
-            # delete the stopwords
-            mask_words=[]
 
-            for token in mask_words_list:
-                # token has no overlap in stopwords
-                if token.isdigit() == True: _token = [token]
-                else: _token = token
+        # process_mask_words_list=[]
+        # # delete the stopwords
+        # for token in mask_words_list:
+        #     token=token.lower()
+        #     # token has no overlap in stopwords
+        #     if token.isdigit() == True:
+        #         _token = [token]
+        #     else:
+        #         _token = token
+        #
+        #     if len(set(_token) & set(stopwords)) == 0 and token not in 'bcdefghjklmnopqrstvwxyz' and token not in process_mask_words_list:
+        #         process_mask_words_list.append(token)
 
-                if len(set(_token) & set(stopwords))==0 and token not in 'bcdefghjklmnopqrstvwxyz':
-                    mask_words.append(token)
-
-            #mask_words=mask_words_list
-            sent_list=[]
+        # filled_sentences = [[sent.replace(tokenizer.mask_token, mask_word.strip().lower()) for mask_word in mask_words] for
+        #                     sent, mask_words in zip(sentences, mask_word_lists)]
+        filled_sentences = []
+        for sent, mask_words in zip(sents, mask_words_list):
+            sentences = []
             for mask_word in mask_words:
-                # split_text=input_texts[idx].split()
-                # mask_word_index=mask_token_index-1
-                #in case the word is overlapped with pre or post word.
+                sentences.append(sent.replace(self.tokenizer.mask_token, mask_word.strip().lower()))
+            filled_sentences.append(list(set(sentences)))
 
-                # if 0<mask_word_index<len(split_text)-1 and \
-                #         (split_text[mask_word_index-1]==mask_word or split_text[mask_word_index+1]==mask_word): continue
-                # elif mask_word_index==0 and split_text[mask_word_index + 1] == mask_word: continue
-                # elif mask_word_index==len(split_text)-1 and split_text[mask_word_index - 1] == mask_word: continue
-                # else:
-                cand_sent = input_texts[idx].replace("<mask>", mask_word.strip()).lower()
-                cand_sent = ' '.join(cand_sent.split()[:max_len])
-                sent_list.append(cand_sent)
-
-            total_sent_list.append(sent_list)
-
-            # if total_sent_list==[[]]:
-            #     print(input_texts[idx])
-
-        return total_sent_list
+        return filled_sentences
 
     def insert(self, input_texts, mask_idx):
         input_texts_with_mask_list = input_texts.split()[:mask_idx] + ["<mask>"] + input_texts.split()[mask_idx:]
@@ -96,31 +93,6 @@ class RobertaEditor(nn.Module):
     def delete(self, input_texts, mask_idx):
         input_texts_with_mask_list = input_texts.split()[:mask_idx] + input_texts.split()[mask_idx + 1:]
         return " ".join(input_texts_with_mask_list)
-
-    def plm_token(self,lines,max_len):
-        rbt_lines=[]
-        gpt_lines=[]
-        for line in lines:
-            plm_line = []
-            abt_line = []
-            line=line.split()
-            for idx, token in enumerate(line):
-                if idx==0:
-                    plm_line.append(token)
-                else:
-                    if token in ["'s","'d","'m","'re","'ve","'ll","n't","<mask>"]:
-                        plm_line.append(token)
-                    else:
-                        abt_token = '▁'+token
-                        token = 'Ġ' + token
-                        plm_line.append(token)
-                        abt_line.append(abt_token)
-            plm_line=plm_line[:self.max_len]
-            rbt_line = ['<s>'] + plm_line + ['</s>']
-            rbt_lines.append(rbt_line)
-            gpt_lines.append(plm_line)
-
-        return rbt_lines,gpt_lines
 
     def state_vec(self, inputs):
         sta_vec_list = []
@@ -195,3 +167,23 @@ class RobertaEditor(nn.Module):
         if np.sum(sta_vec) == 0:
             sta_vec[0] = 1
         return sta_vec
+
+    def plm_token(self,lines):
+        rbt_lines=[]
+        for line in lines:
+            plm_line = []
+            line=line.split()
+            for idx, token in enumerate(line):
+                if idx==0:
+                    plm_line.append(token)
+                else:
+                    if token in ["'s","'d","'m","'re","'ve","'ll","n't","<mask>"]:
+                        plm_line.append(token)
+                    else:
+                        token = 'Ġ' + token
+                        plm_line.append(token)
+            plm_line=plm_line[:self.max_len]
+            rbt_line = ['<s>'] + plm_line + ['</s>']+[self.tokenizer.pad_token]*(self.max_len-2-len(plm_line))
+            rbt_lines.append(rbt_line)
+
+        return rbt_lines

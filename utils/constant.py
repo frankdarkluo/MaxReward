@@ -52,7 +52,6 @@ DATASET_DICT ={
     },
 }
 
-
 def write_sentence(dataset,setting, delim_left, delim_right, orig_text, rewritten_text=None):
 
     if dataset=='yelp' or dataset=='amazon':

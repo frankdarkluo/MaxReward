@@ -2,6 +2,13 @@
 <project version="4">
   <component name="PublishConfigData" autoUpload="Always" serverName="manga4" remoteFilesAllowedToDisappearOnAutoupload="false">
     <serverData>
+      <paths name="manga3">
+        <serverdata>
+          <mappings>
+            <mapping deploy="MaxReward" local="$PROJECT_DIR$" />
+          </mappings>
+        </serverdata>
+      </paths>
       <paths name="manga4">
         <serverdata>
           <mappings>
