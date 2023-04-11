@@ -45,6 +45,7 @@ class Agent(nn.Module):
         self.num_actions = num_actions
         self.args=args
         self.replay_buffer = ReplayBuffer(args.buffer_size)
+        self.path=args.path
 
         # Q-Network
         self.policy_net = DQN(self.state_dim, num_actions).to(device)
@@ -65,20 +66,6 @@ class Agent(nn.Module):
 
         return output
 
-
-    def replay(self, batch_size):
-        minibatch = random.sample(self.memory, batch_size)
-        for state, action, reward, next_state, done in minibatch:
-            target = reward
-            if not done:
-                target = reward + self.gamma * \
-                       np.amax(self.model.predict(next_state)[0])
-            target_f = self.model.predict(state)
-            target_f[0][action] = target
-            self.model.fit(state, target_f, epochs=1, verbose=0)
-        if self.epsilon > self.epsilon_min:
-            self.epsilon *= self.epsilon_decay
-
     def act(self, state, epsilon):
         """Returns action for given state as per current policy
 
@@ -91,18 +78,19 @@ class Agent(nn.Module):
         if random.random() > epsilon:
             state_emb=self.text2emb(state)
             q_value = self.policy_net(state_emb)
-            action = q_value.max(1)[1].item()
+            actions = q_value.max(1)[1]
         else:
-            action = random.randrange(self.num_actions) #.action_space.n=3, {deletion, insertion, replacement}
-        return action
+            actions = torch.tensor(random.choices([0, 1, 2], k=self.args.bsz)).to(device) #.action_space.n=3, {deletion, insertion, replacement}
+        return actions
 
     def save_model(self, path):
         torch.save(self.policy_net.state_dict(), path)
 
     def load_model(self, path):
         self.policy_net.load_state_dict(torch.load(path))
-        self.target_net.load_state_dict(torch.load(path))
+        self.target_net.load_state_dict(self.policy_net.state_dict())
         self.target_net.eval()
+        return self.target_net
 
     def forward(self, state):
         # Apply the linear regression model to obtain a tensor of shape (2, 50257)
@@ -164,6 +152,7 @@ class Agent(nn.Module):
         for target_param, local_param in zip(target_model.parameters(),
                                              local_model.parameters()):
             target_param.data.copy_(tau * local_param.data + (1 - tau) * target_param.data)
+        self.save_model(self.path)
 
 
 class ReplayBuffer(object):

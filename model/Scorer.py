@@ -84,6 +84,7 @@ class Scorer(nn.Module):
             loss=loss_fct(shift_logits.view(-1,lm_logits.size(-1)),shift_labels.view(-1))
             ppl = torch.exp((loss.reshape(-1, input_ids.shape[1]-1)).mean(dim=1))
 
+
         return 1/ppl.pow(self.flu_w)
 
     def keyword_sim(self,ref_new_embeds,ref_old_embeds,state_vec=None):
@@ -148,6 +149,10 @@ class Scorer(nn.Module):
         return total_scores.squeeze(),style_scores.squeeze(), style_labels
 
     def acceptance_prob(self, input_news, input_olds,state_vec):
+
+        # if there is only one word in the input_news, return 0
+        if max(len(word.split()) for word in input_news)==1:
+            return 0,-1,-1
         _scores,style_scores,style_labels=self.scorer(input_news,input_olds,state_vec)
 
         _score_index=torch.argmax(_scores)

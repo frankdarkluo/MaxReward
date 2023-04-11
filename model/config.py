@@ -19,7 +19,7 @@ def get_args():
     parser.add_argument("--sem_weight",type=int, default=3, help='semantic similarity')
     parser.add_argument("--style_weight", type=int, default=12, help='style')
     parser.add_argument("--max_steps", type=int, default=5)
-    parser.add_argument("--buffer_size", type=int, default=50)
+    parser.add_argument("--buffer_size", type=int, default=30)
     parser.add_argument("--num_actions", type=int, default=3)
     parser.add_argument("--tau", type=float, default=1e-3,help='for soft update of target parameters')
     parser.add_argument("--lr", type=float, default=1e-4)
@@ -27,7 +27,8 @@ def get_args():
     parser.add_argument("--setting", type=str, default='zero-shot')
     parser.add_argument("--delim", type=str, default='curly_bracket')
     parser.add_argument("--prompt_setting", type=str, default='classification_v2')
-    parser.add_argument("--bsz",type=int,default=24,help="batch size")
+    parser.add_argument("--bsz",type=int,default=8,help="batch size")
+    parser.add_argument("--path",type=str,default='../ckpt/policy_net.ckpt',help="path for checkpoints")
     parser.add_argument("--gamma", type=int, default=0.99, help="discount factor")
 
     ## Ablation Study:
