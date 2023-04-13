@@ -1,10 +1,8 @@
 import os
-import sys
-sys.path.append('../')
-from DQNSearchAgent import Agent
-from Scorer import Scorer
-from editor import RobertaEditor
-from config import get_args
+from model.DQNSearchAgent import Agent
+from model.Scorer import Scorer
+from model.editor import RobertaEditor
+from model.config import get_args
 import torch.multiprocessing as mp
 import warnings
 from model.nwp import set_seed
@@ -24,7 +22,7 @@ def infer(args, editor, scorer, agent):
 
     BSZ = args.bsz
 
-    of_dir = '../results/' + args.output_dir
+    of_dir = 'results/' + args.output_dir
     if not os.path.exists(of_dir):
         os.makedirs(of_dir)
 
@@ -40,14 +38,18 @@ def infer(args, editor, scorer, agent):
                           pin_memory=True)
 
     # start inference
+    print("start inference...")
     with open(of_dir + infer_file, 'w', encoding='utf8') as f:
 
         # load model
         target_net=agent.load_model(args.path)
+        target_net.eval()
 
         # batch inference
         with torch.no_grad():
             for idx,batch_data in enumerate(test_data):
+                if idx != 0 and idx % 20 == 0:
+                    print("inference batch: {}".format(idx))
                 batch_data=sorted(batch_data, key=lambda x: len(x.split()), reverse=True)
                 ref_olds=batch_data
                 batch_state_vec, _ = editor.state_vec(batch_data)

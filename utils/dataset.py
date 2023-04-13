@@ -15,7 +15,7 @@ class TSTDataset(torch.utils.data.Dataset):
         else:
             postfix = '1'
 
-        filename = '../data/{}/{}.{}'.format(args.dst,prefix,postfix)
+        filename = 'data/{}/{}.{}'.format(args.dst,prefix,postfix)
         with open(filename, 'r', encoding='utf8') as f:
             data = f.readlines()[:]
 

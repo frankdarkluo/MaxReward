@@ -4,7 +4,7 @@ import string
 import sys
 sys.path.append("../")
 import argparse
-from model_utils.functions import softmax
+from model.nwp import softmax
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 model_name1='distilbert-base-uncased-finetuned-sst-2-english'

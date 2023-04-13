@@ -3,9 +3,7 @@ import torch
 import torch.nn as nn
 import numpy as np
 import RAKE
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 import nltk
-from utils.constant import stopwords
 import os
 os.environ["TOKENIZERS_PARALLELISM"] = "true"
 from transformers import logging
@@ -13,7 +11,7 @@ logging.set_verbosity_error()
 special_tokens = ['_num_', "'s","'d","'m","'re","'ve","'ll","n't"]
 
 class RobertaEditor(nn.Module):
-    def __init__(self, opt):
+    def __init__(self, opt,device):
         super(RobertaEditor, self).__init__()
         self.opt = opt
         self.topk = opt.topk
@@ -22,15 +20,16 @@ class RobertaEditor(nn.Module):
         self.tokenizer = RobertaTokenizer.from_pretrained(self.model_dir)
         self.tokenizer.add_tokens(special_tokens)
         self.model.resize_token_embeddings(len(self.tokenizer))
-        print("running the model {}".format(self.model_dir))
+        print("load {} ...".format(self.model_dir))
 
         self.ops_map = [self.replace, self.insert, self.delete]
         self.max_len = opt.max_len
         self.Rake = RAKE.Rake(RAKE.SmartStopList())
+        self.device=device
 
         print("Editor built")
 
-    def edit(self, inputs, ops, positions):
+    def forward(self, inputs, ops, positions):
         # mask_inputs=[]
         mask_inputs=[self.ops_map[op](inp, position) if position < len(inp.split()) else "" for inp, op, position in zip(inputs, ops, positions)]
         if ops[0] < 2:  # replacement or insertion, have a mask
@@ -48,7 +47,7 @@ class RobertaEditor(nn.Module):
         mask_indices = (inputs.input_ids == self.tokenizer.mask_token_id).nonzero(as_tuple=True)[1]
 
         # Send input tensors to device (GPU if available)
-        inputs = {key: value.to(device) for key, value in inputs.items()}
+        inputs = {key: value.to(self.device) for key, value in inputs.items()}
 
         with torch.no_grad():
             outputs = self.model(**inputs)
@@ -136,15 +135,6 @@ class RobertaEditor(nn.Module):
         token_embeddings = model_output[0]  # First element of model_output contains all token embeddings
         input_mask_expanded = attention_mask.unsqueeze(-1).expand(token_embeddings.size()).float()
         return torch.sum(token_embeddings * input_mask_expanded, 1) / torch.clamp(input_mask_expanded.sum(1), min=1e-9)
-
-    def get_contextual_word_embeddings(self, input_texts):
-        inputs = {k: v.to(device) for k, v in self.tokenizer(input_texts, padding=True, return_tensors="pt").items()}
-
-        outputs = self.model(**inputs, output_hidden_states=True)
-        sentence_embeddings = self.mean_pooling(outputs, inputs['attention_mask'])
-        hidden_states = outputs.hidden_states[-1][:, 1:self.max_len+1, :].to(device)
-
-        return hidden_states, sentence_embeddings
 
     def keyword_pos2sta_vec(self, keyword, pos):
         key_ind = []

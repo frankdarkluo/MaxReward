@@ -1,10 +1,10 @@
 import math
 import os
 import logging
-from DQNSearchAgent import Agent
-from Scorer import Scorer
-from editor import RobertaEditor
-from config import get_args
+from model.DQNSearchAgent import Agent
+from model.Scorer import Scorer
+from model.editor import RobertaEditor
+from model.config import get_args
 import torch.multiprocessing as mp
 import warnings
 from model.nwp import set_seed
@@ -38,7 +38,7 @@ def main():
 
     BSZ = args.bsz
 
-    of_dir = '../results/' + args.output_dir
+    of_dir = 'results/' + args.output_dir
     if not os.path.exists(of_dir):
         os.makedirs(of_dir)
 
@@ -133,12 +133,13 @@ def main():
 
         #update replay buffer
         for i in range(BSZ):
-            agent.replay_buffer.push(state[i], actions[i], max_episode_reward[i], state[i], done)
+            agent.replay_buffer.module.push(state[i], actions[i], max_episode_reward[i], state[i], done)
 
         # update Q-network
         if len(agent.replay_buffer) >= args.buffer_size:
             loss = agent.compute_td_loss()
             print("loss is {}".format(str(loss.item())))
+            logging.info("loss is {}".format(str(loss.item())))
             losses.append(loss.item())
 
         if done:

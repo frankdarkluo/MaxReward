@@ -1,22 +1,18 @@
 import torch
 import torch.nn as nn
-import sys
 import os
-import numpy as np
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 from torch.nn import CrossEntropyLoss
 from transformers import logging
 logging.set_verbosity_error()
 from utils.constant import *
-sys.path.append("")
 from transformers import GPTNeoForCausalLM, GPT2LMHeadModel,AutoTokenizer,AutoModelForCausalLM
 from utils.helper import pytorch_cos_sim
-from nwp import predict_next_word
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+from model.nwp import predict_next_word
 
 
 class Scorer(nn.Module):
-    def __init__(self, opt,editor):
+    def __init__(self, opt,editor,device):
         super(Scorer,self).__init__()
         self.opt = opt
         self.editor = editor
@@ -28,6 +24,7 @@ class Scorer(nn.Module):
         self.dst = self.opt.dst
         self.p_setting = self.opt.prompt_setting
         self.memory = []
+        self.device=device
 
         if self.opt.style_mode == 'plm':
             if 'gpt-j-hf' in self.opt.plm_name:
@@ -36,15 +33,15 @@ class Scorer(nn.Module):
             else:
                 self.plm = AutoModelForCausalLM.from_pretrained(self.opt.plm_name, revision="float16")
             self.plm.eval()
-            self.plm.to(device)
+            self.plm.to(self.device)
 
         self.tokenizer = AutoTokenizer.from_pretrained('gpt2')
         self.tokenizer.pad_token = self.tokenizer.eos_token
         self.max_len = self.opt.max_len
-        self.model = GPT2LMHeadModel.from_pretrained('gpt2').to(device)
+        self.model = GPT2LMHeadModel.from_pretrained('gpt2').to(self.device)
         self.ppl_max_len = self.model.config.n_positions
 
-    def style_scorer(self,ref_news):
+    def style_scorer(self,news):
 
         if self.opt.setting == 'zero-shot':
             num_es = 0
@@ -54,23 +51,23 @@ class Scorer(nn.Module):
             delim_left1, delim_right1="{","}"
 
         prefix = create_exemplars(self.dst,num_es, self.p_setting, delim_left1, delim_right1)
-        prompts= [write_sentence(self.dst, self.p_setting, "{", "}", text) for text in ref_news]
+        prompts= [write_sentence(self.dst, self.p_setting, "{", "}", text) for text in news]
         input_candidate_text = [prefix + prompt for prompt in prompts]
 
-        style_probs, style_labels = predict_next_word(self.plm, self.tokenizer, input_candidate_text,
+        tokens_tensor = {k: v.to(self.device) for k, v in self.tokenizer(input_candidate_text, padding=True, return_tensors="pt").items()}
+        style_probs, style_labels = predict_next_word(self.plm, self.tokenizer, tokens_tensor,
                                                         direction=self.opt.direction)
         prob_new_probs=torch.pow(style_probs, self.style_w)
 
         return prob_new_probs,style_labels
 
-    def fluency_scorer(self,ref_news): #ref: https://huggingface.co/docs/transformers/perplexity
+    def fluency_scorer(self,new_embs): #ref: https://huggingface.co/docs/transformers/perplexity
 
-        encodings = self.tokenizer(ref_news, return_tensors="pt",padding=True,max_length=self.max_len).to(device)
-        input_ids = encodings.input_ids
+        input_ids = new_embs['input_ids']
         begin_loc = max(self.stride - self.ppl_max_len, 0)
         end_loc = min(self.stride, input_ids.size(1))
         trg_len = end_loc  # may be different from stride on last loop
-        input_ids =input_ids[:, begin_loc:end_loc].to(device)
+        input_ids =input_ids[:, begin_loc:end_loc]
         target_ids = input_ids.clone()
         target_ids[:, :-trg_len] = -100
 
@@ -83,7 +80,6 @@ class Scorer(nn.Module):
             loss_fct=CrossEntropyLoss(ignore_index=-100,reduction='none')
             loss=loss_fct(shift_logits.view(-1,lm_logits.size(-1)),shift_labels.view(-1))
             ppl = torch.exp((loss.reshape(-1, input_ids.shape[1]-1)).mean(dim=1))
-
 
         return 1/ppl.pow(self.flu_w)
 
@@ -109,10 +105,24 @@ class Scorer(nn.Module):
             kw_similarity, _ = torch.min(sim_vec[weight2].reshape(repeat_num,-1), dim=1)
         return kw_similarity
 
-    def semantic_scorer(self,ref_news, ref_olds,state_vec=None):
+    def mean_pooling(self, model_output, attention_mask):
+        #reference: https://huggingface.co/sentence-transformers/bert-base-nli-mean-tokens
+        token_embeddings = model_output[0]  # First element of model_output contains all token embeddings
+        input_mask_expanded = attention_mask.unsqueeze(-1).expand(token_embeddings.size()).float()
+        return torch.sum(token_embeddings * input_mask_expanded, 1) / torch.clamp(input_mask_expanded.sum(1), min=1e-9)
 
-        ref_new_embeds, mean_new_embeds = self.editor.get_contextual_word_embeddings(ref_news)
-        ref_old_embeds, mean_old_embeds = self.editor.get_contextual_word_embeddings(ref_olds)
+    def get_contextual_word_embeddings(self, text_embs):
+
+        outputs = self.model(**text_embs, output_hidden_states=True)
+        sentence_embeddings = self.mean_pooling(outputs, text_embs['attention_mask'])
+        hidden_states = outputs.hidden_states[-1][:, 1:self.max_len+1, :].to(self.device)
+
+        return hidden_states, sentence_embeddings
+
+    def semantic_scorer(self,new_embs, old_embs,state_vec):
+
+        ref_new_embeds, mean_new_embeds = self.get_contextual_word_embeddings(new_embs)
+        ref_old_embeds, mean_old_embeds = self.get_contextual_word_embeddings(old_embs)
 
         #-----keyword-level sim------
         if self.opt.semantic_mode=='kw':
@@ -127,40 +137,43 @@ class Scorer(nn.Module):
         # -----kw-sent level sim------
         elif self.opt.semantic_mode=='kw-sent':
             kw_sim=self.keyword_sim(ref_new_embeds,ref_old_embeds,state_vec)
-            sent_sim= pytorch_cos_sim(mean_new_embeds, mean_old_embeds)
+            sent_sim= pytorch_cos_sim(mean_new_embeds, mean_old_embeds) # seem to have some problems lol
             similarity = kw_sim.pow(self.sem_w)* sent_sim.pow(self.sem_w).squeeze()
 
         return similarity
 
-    def scorer(self, input_news,ref_oris,state_vec=None):
-        fluency_scores=self.fluency_scorer(input_news) # input-news, ref_oris-->["I like you"]
-        style_scores,style_labels=self.style_scorer(input_news) # input-news, ref_oris-->["I like you"]
-        sim_scores = self.semantic_scorer(input_news, ref_oris, state_vec).squeeze()
+    def scorer(self, fluency, sim, style):
 
         if self.abl=='sty':
-            total_scores = fluency_scores* sim_scores
+            total_scores = fluency* sim
         elif self.abl=='fl':
-            total_scores = sim_scores * style_scores
+            total_scores = sim * style
         elif self.abl=='sem':
-            total_scores = fluency_scores * style_scores
+            total_scores = fluency * style
         else:# None
-            total_scores = fluency_scores * sim_scores * style_scores
+            total_scores = fluency * sim * style
 
-        return total_scores.squeeze(),style_scores.squeeze(), style_labels
+        return total_scores.squeeze()
 
-    def acceptance_prob(self, input_news, input_olds,state_vec):
+    def scoring(self, news, olds,state_vec):
 
         # if there is only one word in the input_news, return 0
-        if max(len(word.split()) for word in input_news)==1:
+        if max(len(word.split()) for word in news)==1:
             return 0,-1,-1
-        _scores,style_scores,style_labels=self.scorer(input_news,input_olds,state_vec)
+        new_embs=self.tokenizer(news,return_tensors='pt',padding=True, truncation=True, max_length=self.max_len)
+        new_embs={k:v.to(self.device) for k,v in new_embs.items()}
+        old_embs=self.tokenizer(olds,return_tensors='pt',padding=True, truncation=True, max_length=self.max_len)
+        old_embs={k:v.to(self.device) for k,v in old_embs.items()}
+
+        fluency_scores = self.fluency_scorer(new_embs)  # input-news, ref_oris-->["I like you"]
+        sim_scores = self.semantic_scorer(new_embs, old_embs, state_vec).squeeze()
+        style_scores, style_labels = self.style_scorer(news)  # input-news, ref_oris-->["I like you"]
+
+        _scores=self.scorer(fluency_scores,sim_scores,style_scores)
 
         _score_index=torch.argmax(_scores)
         _score=torch.max(_scores)
 
-        _seq=len(input_news[0].split())
-
-        # V_score = np.log(np.maximum(np.power(_score.cpu().detach().numpy(), 1.0 /_seq), 1e-200))
         V_score = torch.sigmoid(_score).cpu().detach().numpy()
 
         # Scale the score to be [-3,3]

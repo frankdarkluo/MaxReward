@@ -1,72 +1,113 @@
+# Import necessary libraries
+import os
 import torch
-import random
-from transformers import RobertaTokenizer, RobertaForMaskedLM
+import torch.nn as nn
+import torch.optim as optim
+import torch.distributed as dist
+import torch.nn.functional as F
+from torch.nn.parallel import DistributedDataParallel as DDP
+from torchvision import datasets, transforms
+import torch.multiprocessing as mp
 
-tokenizer = RobertaTokenizer.from_pretrained("roberta-large")
-model = RobertaForMaskedLM.from_pretrained("roberta-large")
 
-def nucleus_sampling(logits, p=0.9):
-    sorted_logits, sorted_indices = torch.sort(logits, descending=True)
-    cumulative_probs = torch.cumsum(torch.softmax(sorted_logits, dim=-1), dim=-1)
+# Function to set up the distributed environment
+def setup(rank, world_size):
+    # Set the IP address and port of the master node
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
 
-    # Remove tokens with cumulative probability above the threshold
-    sorted_indices_to_remove = cumulative_probs > p
+    # Initialize the distributed process group
+    dist.init_process_group("nccl", rank=rank, world_size=world_size)
 
-    # Shift the indices to the right to keep the first token above the threshold
-    sorted_indices_to_remove[..., 1:] = sorted_indices_to_remove[..., :-1].clone()
-    sorted_indices_to_remove[..., 0] = 0
 
-    indices_to_remove = sorted_indices[sorted_indices_to_remove]
-    logits[indices_to_remove] = float('-inf')
+# Function to clean up the distributed environment
+def cleanup():
+    dist.destroy_process_group()
 
-    return logits
 
-def get_edit_probabilities(sentence):
-    # Compute a proxy for edit probabilities by masking each position
-    edit_probs = []
-    for i in range(len(sentence.split())):
-        masked_sentence = " ".join([word if idx != i else tokenizer.mask_token for idx, word in enumerate(sentence.split())])
-        inputs = tokenizer(masked_sentence, return_tensors="pt")
-        mask_position = torch.where(inputs["input_ids"][0] == tokenizer.mask_token_id)[0].item()
+# Define a simple neural network
+class SimpleNet(nn.Module):
+    def __init__(self):
+        super(SimpleNet, self).__init__()
+        # Define layers of the neural network
+        self.conv1 = nn.Conv2d(3, 6, 5)
+        self.pool = nn.MaxPool2d(2, 2)
+        self.conv2 = nn.Conv2d(6, 16, 5)
+        self.fc1 = nn.Linear(16 * 5 * 5, 120)
+        self.fc2 = nn.Linear(120, 84)
+        self.fc3 = nn.Linear(84, 10)
 
-        with torch.no_grad():
-            logits = model(**inputs).logits[0, mask_position]
+    def forward(self, x):
+        # Define the forward pass of the neural network
+        x = self.pool(F.relu(self.conv1(x)))
+        x = self.pool(F.relu(self.conv2(x)))
+        x = x.view(-1, 16 * 5 * 5)
+        x = F.relu(self.fc1(x))
+        x = F.relu(self.fc2(x))
+        x = self.fc3(x)
+        return x
 
-        edit_prob = torch.softmax(logits, dim=-1).max().item()
-        edit_probs.append(edit_prob)
 
-    return torch.tensor(edit_probs)
+def train(rank, world_size):
+    # Set up the distributed environment
+    setup(rank, world_size)
 
-def edit_sentence(sentence, p=0.9, k=3):
-    # Get edit probabilities
-    edit_probs = get_edit_probabilities(sentence)
+    # Create dataset and dataloader
+    transform = transforms.Compose(
+        [transforms.RandomHorizontalFlip(), transforms.RandomCrop(32, padding=4), transforms.ToTensor(),
+         transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
+    dataset = datasets.CIFAR10(root='./data', train=True, download=True, transform=transform)
 
-    # Apply nucleus sampling to edit probabilities
-    sampled_edit_probs = nucleus_sampling(edit_probs, p)
+    # Create sampler for distributed training
+    sampler = torch.utils.data.distributed.DistributedSampler(dataset, num_replicas=world_size, rank=rank)
 
-    # Select top-k positions with the highest probabilities
-    top_k_positions = torch.topk(sampled_edit_probs, k).indices
+    # Create dataloader with distributed sampler
+    dataloader = torch.utils.data.DataLoader(dataset, batch_size=100, sampler=sampler, num_workers=2)
 
-    # Edit tokens at the selected positions
-    edited_sentence = []
-    for position, word in enumerate(sentence.split()):
-        if position in top_k_positions:
-            masked_sentence = " ".join([word if idx != position else tokenizer.mask_token for idx, _ in enumerate(sentence.split())])
-            inputs = tokenizer(masked_sentence, return_tensors="pt")
-            mask_position = torch.where(inputs["input_ids"][0] == tokenizer.mask_token_id)[0].item()
+    # Create the model, optimizer, and loss function
+    device = torch.device(f"cuda:{rank}")
+    model = SimpleNet().to(device)
 
-            with torch.no_grad():
-                logits = model(**inputs).logits[0, mask_position]
+    # Wrap model with DistributedDataParallel
+    ddp_model = DDP(model, device_ids=[rank])
 
-            new_token_id = torch.multinomial(torch.softmax(logits, dim=-1), 1).item()
-            new_word = tokenizer.decode(new_token_id)
-        else:
-            new_word = word
+    # Set the loss function and optimizer
+    criterion = nn.CrossEntropyLoss()
+    optimizer = optim.SGD(ddp_model.parameters(), lr=0.001, momentum=0.9)
 
-        edited_sentence.append(new_word)
+    # Train the model
+    for epoch in range(5):
+        running_loss = 0.0
+        for i, data in enumerate(dataloader, 0):
+            inputs, labels = data
+            inputs, labels = inputs.to(device), labels.to(device)
 
-    return " ".join(edited_sentence)
+            # Zero the parameter gradients
+            optimizer.zero_grad()
 
-sentence = "This is a test sentence."
-edited_sentence = edit_sentence(sentence)
-print(edited_sentence)
+            # Forward pass, backward pass, and optimization step
+            outputs = ddp_model(inputs)
+            loss = criterion(outputs, labels)
+            loss.backward()
+            # Update the model parameters
+            optimizer.step()
+
+            # Update the running loss
+            running_loss += loss.item()
+
+            # Print the loss every 2000 mini-batches
+            if i % 100 == 99:
+                print(f"[{epoch + 1}, {i + 1}] loss: {running_loss / 2000}")
+                running_loss = 0.0
+
+    # Clean up the distributed environment
+    cleanup()
+
+def main():
+    # Get the number of GPUs available
+    world_size = torch.cuda.device_count()
+    # Spawn one process per GPU and start the training
+    mp.spawn(train, args=(world_size,), nprocs=world_size, join=True)
+
+if __name__ == "__main__":
+    main()

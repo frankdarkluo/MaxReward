@@ -5,7 +5,6 @@ from nltk.corpus import stopwords
 from model.config import get_args
 args=get_args()
 stopwords.words('english')
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 def set_seed(seed):
     random.seed(seed)
@@ -21,9 +20,8 @@ def softmax(x):
     return softmax_x
 
 
-def predict_next_word(model,tokenizer,input_text,direction):
+def predict_next_word(model,tokenizer,tokens_tensor,direction):
 
-    tokens_tensor = {k: v.to(device) for k, v in tokenizer(input_text, padding=True, return_tensors="pt").items()}
     # Set the model in evaluation mode to deactivate the DropOut modules
     model.eval()
     # If you have a GPU, put everything on cuda

@@ -2,6 +2,9 @@ import numpy as np
 import matplotlib.pyplot as plt
 from torch import cuda
 import torch
+import socket
+import torch.distributed as dist
+import math
 device = torch.device('cuda' if cuda.is_available() else 'cpu')
 
 def plot(frame_idx, rewards, losses):
@@ -13,6 +16,18 @@ def plot(frame_idx, rewards, losses):
     plt.title('loss')
     plt.plot(losses)
     plt.show()
+
+def get_free_port():
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(('', 0))
+        return s.getsockname()[1]
+
+def sync_initial_weights(model, rank, world_size):
+    for param in model.parameters():
+        if rank == 0:
+            dist.broadcast(param.data, src=0)
+        else:
+            dist.broadcast(param.data, src=0)
 
 def evaluate_sc(model, valid_loader, loss_fn, epoch):
     '''Evaluation function for style classifier'''
