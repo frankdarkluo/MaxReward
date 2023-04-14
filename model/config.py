@@ -32,8 +32,8 @@ def get_args():
     parser.add_argument("--bsz",type=int,default=4,help="batch size")
     parser.add_argument("--path",type=str,default='ckpt/policy_net.ckpt',help="path for checkpoints")
     parser.add_argument("--gamma", type=int, default=0.99, help="discount factor")
-    parser.add_argument("--world_size", type=int, default=2, help="multiple gpu processing")
     parser.add_argument("--update_interval", type=int, default=2, help="update_interval")
+    # parser.add_argument("--world_size", type=int, default=2, help="multiple gpu processing")
     # parser.add_argument("--mode", type=str, default='train')
 
     ## Ablation Study:

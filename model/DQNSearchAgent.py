@@ -38,22 +38,16 @@ class Agent(nn.Module):
     def __init__(self, editor,args,device):
         super(Agent, self).__init__()  ## calls __init__ method of nn.Module class
         self.max_len=args.max_len
-        self.model=editor.module.model
-        self.tokenizer=editor.module.tokenizer
+        # self.model=editor.module.model
+        # self.tokenizer=editor.module.tokenizer
+        self.model=editor.model
+        self.tokenizer=editor.tokenizer
         self.state_dim = len(self.tokenizer.get_vocab())
         self.num_actions = 3
         self.args=args
         # self.replay_buffer = ReplayBuffer(args.buffer_size)
         self.path=args.path
         self.device=device
-
-        # Q-Network
-        # self.policy_net = DQN(self.state_dim, self.num_actions).to(device)
-        # self.target_net = DQN(self.state_dim, self.num_actions).to(device)
-        # self.target_net.load_state_dict(self.policy_net.state_dict())
-        # self.target_net.eval()
-
-        # self.optimizer = optim.Adam(self.policy_net.parameters(), lr=args.lr)
 
     def text2emb(self, sent):
         # Obtain the input ids from the tokenizer
@@ -66,7 +60,7 @@ class Agent(nn.Module):
 
         return output
 
-    def act(self, state, epsilon):
+    def act(self, state, epsilon, policy_net):
         """Returns action for given state as per current policy
 
         Params
@@ -77,7 +71,7 @@ class Agent(nn.Module):
         """
         if random.random() > epsilon:
             state_emb=self.text2emb(state)
-            q_value = self.policy_net(state_emb)
+            q_value = policy_net(state_emb)
             actions = q_value.max(1)[1]
         else:
             actions = torch.tensor(random.choices([0, 1, 2], k=self.args.bsz)).to(self.device) #.action_space.n=3, {deletion, insertion, replacement}

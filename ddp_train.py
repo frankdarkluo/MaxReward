@@ -24,7 +24,6 @@ from utils.dataset import TSTDataset
 os.environ["TOKENIZERS_PARALLELISM"] = "true"
 tzone = tz.gettz('America/Edmonton')
 warnings.filterwarnings('ignore')
-# device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # Function to set up the distributed environment
 def setup(rank, world_size):
@@ -34,6 +33,15 @@ def setup(rank, world_size):
 
     # Initialize the distributed process group
     dist.init_process_group(backend='nccl', rank=rank, world_size=world_size)
+
+def reduce_tensor(tensor):
+    """
+    Reduce the tensor across all devices.
+    """
+    rt = tensor.clone()
+    dist.all_reduce(rt, op=dist.ReduceOp.SUM)
+    rt /= torch.distributed.get_world_size()
+    return rt
 
 
 class FP32Scaler(torch.cuda.amp.GradScaler):
@@ -72,11 +80,7 @@ class FP32Scaler(torch.cuda.amp.GradScaler):
         return
 
 
-# Function to clean up the distributed environment
-def cleanup():
-    dist.destroy_process_group()
-
-def train(rank,world_size,args,train_set):
+def train(rank, world_size, args, train_set):
     # Set up the distributed environment
     setup(rank, world_size)
 
@@ -86,6 +90,7 @@ def train(rank,world_size,args,train_set):
     editor = DDP(RobertaEditor(args,device).to(device),device_ids=[rank])
     scorer = DDP(Scorer(args, editor,device).to(device),device_ids=[rank])
 
+    # Initialize the network
     agent = DDP(Agent(editor, args, device).to(device),device_ids=[rank])
     local_net = DQN(agent.module.state_dim, args.num_actions).to(device)
     model_net = DDP(local_net,device_ids=[rank])
@@ -98,25 +103,26 @@ def train(rank,world_size,args,train_set):
 
     sync_initial_weights(local_net, rank,world_size)
 
-    # Initialize the network
+
     replay_buffer = ReplayBuffer(args.buffer_size)
 
+    # epsilon-exploration for choosing an action
     epsilon_start = 1.0
     epsilon_final = 0.01
     epsilon_decay = 500
+
+    epsilons = lambda frame_idx: epsilon_final + (epsilon_start - epsilon_final) * math.exp(
+        -1. * frame_idx / epsilon_decay)
 
     train_sampler = DistributedSampler(train_set)
     train_data = DataLoader(train_set,
                             batch_size=args.bsz,
                             sampler=train_sampler,
                             num_workers=world_size,
-                            pin_memory=True)
+                            pin_memory=True,
+                            drop_last=True)
 
     optimizer = optim.Adam(model_net.parameters(), lr=args.lr)
-
-    # epsilon-exploration for choosing an action
-    epsilons = lambda frame_idx: epsilon_final + (epsilon_start - epsilon_final) * math.exp(
-        -1. * frame_idx / epsilon_decay)
 
     global_step = 0
 
@@ -126,6 +132,7 @@ def train(rank,world_size,args,train_set):
         ref_olds=batch_data
         batch_state_vec, _ = editor.module.state_vec(batch_data)
 
+        # Initialize the environment
         all_rewards = []
         losses = []
 
@@ -151,7 +158,7 @@ def train(rank,world_size,args,train_set):
                 action=actions[idx]
                 intermediate_results = []
                 for positions in range(len(state_words)):
-                    edited_state = editor([state[idx]], [action], [positions])
+                    edited_state = editor.module.edit([state[idx]], [action], [positions])
                     intermediate_results+=edited_state
 
                 ref_news.append(intermediate_results)
@@ -182,6 +189,9 @@ def train(rank,world_size,args,train_set):
         for i in range(args.bsz):
             replay_buffer.push(state[i], actions[i], max_episode_reward[i], state[i], done)
 
+        if done:
+            all_rewards.append(max_episode_reward)
+
         # ------------------- update Q network ------------------- #
         if len(replay_buffer) >= args.buffer_size:
             states, actions, rewards, next_states, dones = replay_buffer.sample(args.buffer_size)
@@ -204,28 +214,36 @@ def train(rank,world_size,args,train_set):
 
             loss = (q_value - expected_q_value.data).pow(2).mean() # MSE loss
             optimizer.zero_grad()
+            scaler.unscale_(optimizer)
             loss.backward()
             optimizer.step()
-            print("loss is {}".format(str(loss.item())))
-            logging.info("loss is {}".format(str(loss.item())))
-            losses.append(loss.item())
+            # scaler.step(optimizer)
+            scaler.update()
+
+            #Aggregate loss values across devices for logging
+            torch.distributed.all_reduce(loss, op=torch.distributed.ReduceOp.SUM)
+            agg_loss = loss / world_size
+            if torch.distributed.get_rank() == 0:
+                print("loss is {}".format(str(agg_loss.item())))
+                logging.info("loss is {}".format(str(agg_loss.item())))
+            losses.append(agg_loss.item())
 
             # ------------------- soft update target network ------------------- #
             global_step+=1
             if global_step % args.update_interval == 0:
+                """  Soft update model parameters.
+                     θ_target = τ*θ_local + (1 - τ)*θ_target
+                """
                 for target_param, local_param in zip(target_net.parameters(),
                                                      local_net.parameters()):
                     target_param.data.copy_(args.tau * local_param.data + (1 - args.tau) * target_param.data)
-                torch.save(target_net.state_dict(), os.path.join(of_dir, global_step+'target_net.pt'))
-
-
-        if done:
-            all_rewards.append(max_episode_reward)
+                torch.save(target_net.state_dict(), os.path.join(of_dir, str(global_step) + '_target_net.pt'))
 
         if idx % 1 == 0:
             plot(idx, all_rewards, losses)
 
-    cleanup()
+    # Function to clean up the distributed environment
+    dist.destroy_process_group()
 
 if __name__ == "__main__":
 
@@ -255,4 +273,4 @@ if __name__ == "__main__":
              join=True)
 
     # Clean up the distributed environment
-    cleanup()
+    dist.destroy_process_group()
