@@ -1,34 +1,42 @@
 import os
-from model.DQNSearchAgent import Agent
 from model.Scorer import Scorer
 from model.editor import RobertaEditor
 from model.config import get_args
-import torch.multiprocessing as mp
+from model.DQNSearchAgent import Agent, DQN
 import warnings
 from model.nwp import set_seed
-import datetime
+import logging
 from dateutil import tz
 import torch
 from torch.utils.data import DataLoader
 from utils.dataset import TSTDataset
-os.environ['CUDA_VISIBLE_DEVICES']='2'
 os.environ["TOKENIZERS_PARALLELISM"] = "true"
 tzone = tz.gettz('America/Edmonton')
 warnings.filterwarnings('ignore')
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+from transformers import RobertaTokenizer, RobertaForMaskedLM
+rbt_model = RobertaForMaskedLM.from_pretrained('roberta-large', return_dict=True).to(device)
+rbt_tokenizer = RobertaTokenizer.from_pretrained('roberta-large')
+print("loading roberta ...")
 
 def infer(args, editor, scorer, agent):
     set_seed(args.seed)
 
     BSZ = args.bsz
 
-    of_dir = 'results/' + args.output_dir
-    if not os.path.exists(of_dir):
-        os.makedirs(of_dir)
+    infer_dir = 'results/' + args.path+'/'
+    if not os.path.exists(infer_dir):
+        os.makedirs(infer_dir)
 
-    timestamp = datetime.datetime.now().astimezone(tzone).strftime('%Y-%m-%d_%H:%M:%S')
-
-    infer_file = '{}_output.txt'.format(timestamp)
+    infer_file = infer_dir+'inference.txt'
+    log_txt_path=infer_file.split('.txt')[0] + '.log'
+    print(log_txt_path)
+    for handler in logging.root.handlers[:]:
+        logging.root.removeHandler(handler)
+    logging.basicConfig(format='',filename=log_txt_path,filemode='w',
+                        datefmt='%m/%d/%Y %H:%M:%S',level=logging.INFO)
+    logging.info(args)
 
     test_dataset=TSTDataset(args,'test')
     test_data=DataLoader(test_dataset,
@@ -39,10 +47,12 @@ def infer(args, editor, scorer, agent):
 
     # start inference
     print("start inference...")
-    with open(of_dir + infer_file, 'w', encoding='utf8') as f:
+    with open(infer_file, 'w', encoding='utf8') as f:
 
-        # load model
-        target_net=agent.load_model(args.path)
+        # load target model
+        ckpt_path=os.path.join(infer_dir+str(args.ckpt_num)+'_target_net.pt')
+        target_net = DQN(agent.state_dim, args.num_actions).to(device)
+        target_net.load_state_dict(torch.load(ckpt_path))
         target_net.eval()
 
         # batch inference
@@ -58,13 +68,12 @@ def infer(args, editor, scorer, agent):
 
                 max_episode_reward = [0 for _ in range(len(ref_olds))]
                 for step in range(args.max_steps):
-
-                    torch.cuda.empty_cache()
-
                     # infer actions
                     with torch.no_grad():
                         q_values = target_net(agent.text2emb(state))
                         actions = q_values.max(1)[1]
+                        print("the q values for each action are",q_values)
+                        logging.info("the action is {}".format(actions.item()))
 
                     ref_news = []
                     for idx in range(BSZ):
@@ -78,7 +87,7 @@ def infer(args, editor, scorer, agent):
                         ref_news.append(intermediate_results)
 
                     # get reward
-                    results = [scorer.acceptance_prob(ref_news[i], [ref_olds[i]], [batch_state_vec[i]])
+                    results = [scorer.scoring(ref_news[i], [ref_olds[i]], [batch_state_vec[i]])
                                                                         for i in range(len(ref_news))]
 
                     index, ref_new_score, new_style_labels = zip(*results)
@@ -101,9 +110,9 @@ def infer(args, editor, scorer, agent):
 
 def main():
     args = get_args()
-    editor = RobertaEditor(args).to(device)
-    scorer = Scorer(args, editor).to(device)
-    agent = Agent(editor, args).to(device)
+    editor = RobertaEditor(args, device, rbt_model, rbt_tokenizer).to(device)
+    scorer = Scorer(args, editor, device).to(device)
+    agent = Agent(args, device, rbt_model, rbt_tokenizer).to(device)
     infer(args, editor, scorer, agent)
 
 if __name__ == '__main__':

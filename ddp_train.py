@@ -19,7 +19,7 @@ from dateutil import tz
 from torch.utils.data import DataLoader, DistributedSampler
 from utils.helper import plot, sync_initial_weights, get_free_port
 from utils.dataset import TSTDataset
-
+from transformers import RobertaTokenizer, RobertaForMaskedLM
 
 os.environ["TOKENIZERS_PARALLELISM"] = "true"
 tzone = tz.gettz('America/Edmonton')
@@ -87,11 +87,15 @@ def train(rank, world_size, args, train_set):
     device = torch.device(f"cuda:{rank}")
 
     # Wrap model with DistributedDataParallel
-    editor = DDP(RobertaEditor(args,device).to(device),device_ids=[rank])
+
+    rbt_model = RobertaForMaskedLM.from_pretrained('roberta-large', return_dict=True).to(device)
+    rbt_tokenizer = RobertaTokenizer.from_pretrained('roberta-large')
+
+    editor = DDP(RobertaEditor(args,device,rbt_model,rbt_tokenizer).to(device),device_ids=[rank])
     scorer = DDP(Scorer(args, editor,device).to(device),device_ids=[rank])
 
     # Initialize the network
-    agent = DDP(Agent(editor, args, device).to(device),device_ids=[rank])
+    agent = DDP(Agent(editor, args, device,rbt_model,rbt_tokenizer).to(device),device_ids=[rank])
     local_net = DQN(agent.module.state_dim, args.num_actions).to(device)
     model_net = DDP(local_net,device_ids=[rank])
     target_net = DQN(agent.module.state_dim, args.num_actions).to(device)

@@ -35,24 +35,23 @@ class DQN(nn.Module):
 
 
 class Agent(nn.Module):
-    def __init__(self, editor,args,device):
+    def __init__(self, args,device,rbt_model, rbt_tokenizer):
         super(Agent, self).__init__()  ## calls __init__ method of nn.Module class
         self.max_len=args.max_len
-        # self.model=editor.module.model
-        # self.tokenizer=editor.module.tokenizer
-        self.model=editor.model
-        self.tokenizer=editor.tokenizer
+
+        self.model=rbt_model
+        self.tokenizer=rbt_tokenizer
         self.state_dim = len(self.tokenizer.get_vocab())
         self.num_actions = 3
         self.args=args
-        # self.replay_buffer = ReplayBuffer(args.buffer_size)
         self.path=args.path
         self.device=device
 
     def text2emb(self, sent):
         # Obtain the input ids from the tokenizer
         encoded_input = self.tokenizer(sent, return_tensors='pt', add_special_tokens=True, max_length=self.max_len, truncation=True,padding=True)
-        input_ids = self.model(**encoded_input.to(self.device), output_hidden_states=True)
+        with torch.no_grad():
+            input_ids = self.model(**encoded_input.to(self.device), output_hidden_states=True)
         # same as self.model(torch.tensor(self.tokenizer.encode(sent[0])).unsqueeze(0).to(device))
 
         # Apply average pooling to obtain a tensor of shape (BSZ, 50257)
@@ -71,20 +70,17 @@ class Agent(nn.Module):
         """
         if random.random() > epsilon:
             state_emb=self.text2emb(state)
-            q_value = policy_net(state_emb)
+            with torch.no_grad():
+                # t.max(1) will return the largest column value of each row.
+                # second column on max result is index of where max element was
+                # found, so we pick action with the larger expected reward.
+                q_value = policy_net(state_emb)
+
+            print("q_value",q_value)
             actions = q_value.max(1)[1]
         else:
             actions = torch.tensor(random.choices([0, 1, 2], k=self.args.bsz)).to(self.device) #.action_space.n=3, {deletion, insertion, replacement}
         return actions
-
-    def save_model(self, path):
-        torch.save(self.policy_net.state_dict(), path)
-
-    def load_model(self, path):
-        self.policy_net.load_state_dict(torch.load(path))
-        self.target_net.load_state_dict(self.policy_net.state_dict())
-        self.target_net.eval()
-        return self.target_net
 
     def forward(self, state):
         # Apply the linear regression model to obtain a tensor of shape (2, 50257)
@@ -100,53 +96,6 @@ class Agent(nn.Module):
         output = self.fc2(x) #action
 
         return output
-
-    # def compute_td_loss(self):
-    #     states, actions, rewards, next_states, dones = self.replay_buffer.sample(self.args.buffer_size)
-    #
-    #     actions=torch.asarray(actions).to(self.device)
-    #     rewards=torch.asarray(rewards).to(self.device)
-    #     dones=torch.asarray(dones).to(self.device)+0 # From T/F to be 0/1
-    #
-    #     self.policy_net.train()
-    #     self.target_net.eval()
-    #     q_values = self.policy_net(self.text2emb(states.tolist()))
-    #     q_value = q_values.gather(1, actions.unsqueeze(1)).squeeze(1)
-    #
-    #     with torch.no_grad():
-    #         next_q_values = self.target_net(self.text2emb(next_states.tolist()))
-    #         next_q_value = next_q_values.max(1)[0]
-    #
-    #     reward=torch.tensor(rewards).to(self.device)
-    #
-    #     # Max DQN
-    #     expected_q_value = torch.max(reward, next_q_value * (1 - dones))
-    #
-    #     loss = (q_value - expected_q_value.data).pow(2).mean() # MSE loss
-    #     self.optimizer.zero_grad()
-    #     loss.backward()
-    #     self.optimizer.step()
-    #
-    #     self.soft_update(self.policy_net, self.target_net, self.args.tau)
-    #
-    #     # ------------------- update target network ------------------- #
-    #     return loss
-
-    # def soft_update(self, local_model, target_model, tau):
-    #     """Soft update model parameters.
-    #     θ_target = τ*θ_local + (1 - τ)*θ_target
-    #
-    #     Params
-    #     =======
-    #         local model (PyTorch model): weights will be copied from
-    #         target model (PyTorch model): weights will be copied to
-    #         tau (float): interpolation parameter
-    #
-    #     """
-    #     for target_param, local_param in zip(target_model.parameters(),
-    #                                          local_model.parameters()):
-    #         target_param.data.copy_(tau * local_param.data + (1 - tau) * target_param.data)
-    #     self.save_model(self.path)
 
 
 class ReplayBuffer(object):

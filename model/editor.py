@@ -1,4 +1,3 @@
-from transformers import RobertaTokenizer, RobertaForMaskedLM
 import torch
 import torch.nn as nn
 import numpy as np
@@ -11,16 +10,14 @@ logging.set_verbosity_error()
 special_tokens = ['_num_', "'s","'d","'m","'re","'ve","'ll","n't"]
 
 class RobertaEditor(nn.Module):
-    def __init__(self, opt,device):
+    def __init__(self, opt,device,rbt_model, rbt_tokenizer):
         super(RobertaEditor, self).__init__()
         self.opt = opt
         self.topk = opt.topk
-        self.model_dir='roberta-large'
-        self.model = RobertaForMaskedLM.from_pretrained(self.model_dir, return_dict=True).to(device)
-        self.tokenizer = RobertaTokenizer.from_pretrained(self.model_dir)
+        self.model=rbt_model
+        self.tokenizer=rbt_tokenizer
         self.tokenizer.add_tokens(special_tokens)
         self.model.resize_token_embeddings(len(self.tokenizer))
-        print("load {} ...".format(self.model_dir))
 
         self.ops_map = [self.replace, self.insert, self.delete]
         self.max_len = opt.max_len

@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project version="4">
-  <component name="PublishConfigData" autoUpload="Always" serverName="manga3" remoteFilesAllowedToDisappearOnAutoupload="false">
+  <component name="PublishConfigData" autoUpload="Always" serverName="manga4" remoteFilesAllowedToDisappearOnAutoupload="false">
     <serverData>
       <paths name="manga3">
         <serverdata>
@@ -12,7 +12,7 @@
       <paths name="manga4">
         <serverdata>
           <mappings>
-            <mapping deploy="/home/gluo/MaxReward" local="$PROJECT_DIR$" />
+            <mapping deploy="MaxReward" local="$PROJECT_DIR$" />
           </mappings>
         </serverdata>
       </paths>

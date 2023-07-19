@@ -15,6 +15,8 @@ def plot(frame_idx, rewards, losses):
     plt.subplot(132)
     plt.title('loss')
     plt.plot(losses)
+    plt.savefig('figure.pdf', format='pdf')  # Save the plot as a PDF
+    plt.show()
     plt.show()
 
 def get_free_port():

@@ -6,7 +6,7 @@ from torch.nn import CrossEntropyLoss
 from transformers import logging
 logging.set_verbosity_error()
 from utils.constant import *
-from transformers import GPTNeoForCausalLM, GPT2LMHeadModel,AutoTokenizer,AutoModelForCausalLM
+from transformers import GPTNeoForCausalLM, GPT2LMHeadModel,AutoTokenizer
 from utils.helper import pytorch_cos_sim
 from model.nwp import predict_next_word
 
@@ -26,20 +26,24 @@ class Scorer(nn.Module):
         self.memory = []
         self.device=device
 
-        if self.opt.style_mode == 'plm':
-            if 'gpt-j-hf' in self.opt.plm_name:
-                self.plm = GPTNeoForCausalLM.from_pretrained(self.opt.plm_name, revision="float16")
+        if opt.style_mode == 'plm':
+            if 'gpt-j-hf' in opt.plm_name:
+                self.plm = GPTNeoForCausalLM.from_pretrained(
+                                                            opt.plm_name,
+                                                            revision="float16",
+                                                            lower_cpu_memory_usage=True)
                 self.plm.half()
             else:
-                self.plm = AutoModelForCausalLM.from_pretrained(self.opt.plm_name, revision="float16")
+                self.plm = torch.load(opt.plm_name+'.pt')
             self.plm.eval()
             self.plm.to(self.device)
+            print("PLM loaded")
 
-        self.tokenizer = AutoTokenizer.from_pretrained('gpt2')
+        self.tokenizer = AutoTokenizer.from_pretrained(opt.plm_name)
         self.tokenizer.pad_token = self.tokenizer.eos_token
-        self.max_len = self.opt.max_len
-        self.model = GPT2LMHeadModel.from_pretrained('gpt2').to(self.device)
-        self.ppl_max_len = self.model.config.n_positions
+        self.max_len = opt.max_len
+
+        self.ppl_max_len = 1024
 
     def style_scorer(self,news):
 
@@ -73,7 +77,7 @@ class Scorer(nn.Module):
 
         # Ref: https://github.com/huggingface/transformers/issues/473
         with torch.no_grad():
-            outputs = self.model(input_ids, labels=target_ids)
+            outputs = self.plm(input_ids, labels=target_ids)
             lm_logits=outputs[1]
             shift_logits = lm_logits[..., :input_ids.shape[1]-1, :].contiguous()
             shift_labels = target_ids[..., 1:].contiguous()
@@ -112,8 +116,8 @@ class Scorer(nn.Module):
         return torch.sum(token_embeddings * input_mask_expanded, 1) / torch.clamp(input_mask_expanded.sum(1), min=1e-9)
 
     def get_contextual_word_embeddings(self, text_embs):
-
-        outputs = self.model(**text_embs, output_hidden_states=True)
+        with torch.no_grad():
+            outputs = self.plm(**text_embs, output_hidden_states=True)
         sentence_embeddings = self.mean_pooling(outputs, text_embs['attention_mask'])
         hidden_states = outputs.hidden_states[-1][:, 1:self.max_len+1, :].to(self.device)
 
