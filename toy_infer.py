@@ -4,7 +4,6 @@ from model.editor import RobertaEditor
 from model.config import get_args
 from model.DQNSearchAgent import Agent, DQN
 import warnings
-from model.nwp import set_seed
 import logging
 from dateutil import tz
 import torch
@@ -42,22 +41,22 @@ def load_data(args):
 
     return infer_dir,infer_file,test_data
 
-# Function to create reference news given a state and actions
-def create_ref_news(state, action, MAX_LEN):
-    ref_news = []
+# Function to create inputerence news given a state and actions
+def create_input_news(state, action, MAX_LEN):
+    input_news = []
     cur_state = state[0][:MAX_LEN]
 
     if action != 2:
         for position in reversed(range(len(state))):
             for cand_letter in list(string.ascii_lowercase):
                 edited_state = edit(cur_state, action, position, cand_letter)[:MAX_LEN]
-                ref_news.append(edited_state)
+                input_news.append(edited_state)
     else:
         for position in reversed(range(len(state))):
             edited_state = edit(cur_state, action, position)[:MAX_LEN]
-            ref_news.append(edited_state)
+            input_news.append(edited_state)
 
-    return ref_news
+    return input_news
 
 def infer_action(target_net, agent, state):
     with torch.no_grad():
@@ -94,22 +93,22 @@ def infer(args, agent):
             for idx,batch_data in enumerate(test_data):
                 if idx != 0 and idx % 20 == 0:
                     print("inference batch: {}".format(idx))
-                ref_olds=batch_data
+                input_olds=batch_data
 
                 # generate a random input letter
                 input_letter = random.choice(string.ascii_lowercase)
-                state=[ref_olds]
+                state=[input_olds]
 
-                max_episode_reward = float('-inf')
+                max_episode_reward , _ = get_reward(state, input_letter)
                 for step in range(args.max_steps):
 
                     # infer actions
                     action=infer_action(target_net, agent, state)
 
-                    ref_news=create_ref_news(state, action, MAX_LEN)
+                    input_news=create_input_news(state, action, MAX_LEN)
 
                     # get max reward
-                    reward, temp_next_state = get_reward(ref_news, input_letter)
+                    reward, temp_next_state = get_reward(input_news, input_letter)
 
                     cur_state=state
                     accept = False
@@ -136,8 +135,8 @@ def infer(args, agent):
                 #update output.txt
                 for i in range(BSZ):
                     f.write(state[i]+'\n')
-                    print(f"the final output for {ref_olds} is {state[i]}\n")
-                    logging.info(f"the final output for {ref_olds} is {state[i]}\n")
+                    print(f"the final output for {input_olds} is {state[i]}\n")
+                    logging.info(f"the final output for {input_olds} is {state[i]}\n")
                     f.flush()
 
 

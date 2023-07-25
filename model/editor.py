@@ -29,6 +29,12 @@ class RobertaEditor(nn.Module):
     def edit(self, inputs, ops, positions):
         # mask_inputs=[]
         mask_inputs=[self.ops_map[op](inp, position) if position < len(inp.split()) else "" for inp, op, position in zip(inputs, ops, positions)]
+
+        # if idx:
+        #     mask_outputs = self.generate(mask_inputs[idx])
+        #     return mask_outputs
+        # else:
+        #     return mask_inputs
         if ops[0] < 2:  # replacement or insertion, have a mask
             index = [idx for idx, masked_input in enumerate(mask_inputs) if '<mask>' in masked_input]
             mask_inputs = np.array(mask_inputs)[index]

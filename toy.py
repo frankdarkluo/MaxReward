@@ -19,7 +19,14 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 def get_reward(states, input_letter=None):
-    rewards=[1/(1.5*len(state)-state.count(input_letter)) for state in states]
+    """
+    1. You get a positive reward for each occurrence of the target letter in the state.
+    The more of these letters, the higher your reward.
+    2.However, for each non-target letter in the state, you get a slight penalty (in this case, -0.1).
+    This discourages unnecessary lengthening of the string with non-target letters,
+    while still allowing flexibility for the necessary actions.
+    """
+    rewards = [1.1*state.count(input_letter) - 0.1 * (len(state) - state.count(input_letter)) for state in states]
     rewards=np.asarray(rewards)
     reward=np.max(rewards)
     best_cand_state=states[np.argmax(rewards)]
@@ -53,6 +60,10 @@ def load_data(input_file, infer_file):
 
     return test_data
 
+# Function to check if a string is all letters
+def is_all_letter(input_string, letter):
+    return all(char == letter for char in input_string)
+
 # Function to initialize the model, network, replay buffer, optimizer and epsilon
 def initialize_model(args):
     rbt_model = RobertaForMaskedLM.from_pretrained('roberta-large', return_dict=True).to(device)
@@ -69,8 +80,8 @@ def initialize_model(args):
 
     # epsilon-exploration for choosing an action
     epsilon_start = 1.0
-    epsilon_final = 0.01
-    epsilon_decay = 200
+    epsilon_final = 0.2
+    epsilon_decay = 1000
 
     epsilons = lambda frame_idx: epsilon_final + (epsilon_start - epsilon_final) * math.exp(
         -1. * frame_idx / epsilon_decay)
@@ -128,29 +139,28 @@ def update_networks(agent, replay_buffer, local_net, target_net, optimizer, args
 
     return loss.item(), global_step
 
-# Function to create reference news given a state and actions
-def create_ref_news(state, actions, MAX_LEN):
-    ref_news = []
+# Function to create inputerence news given a state and actions
+def create_input_news(state, action, MAX_LEN):
+    input_news = []
     cur_state = state[0][:MAX_LEN]
-    action = actions[0]
 
     if action != 2:
-        for position in reversed(range(len(state))):
+        for position in reversed(range(len(state[0]))):
             for cand_letter in list(string.ascii_lowercase):
                 edited_state = edit(cur_state, action, position, cand_letter)[:MAX_LEN]
-                ref_news.append(edited_state)
+                input_news.append(edited_state)
     else:
-        for position in reversed(range(len(state))):
+        for position in reversed(range(len(state[0]))):
             edited_state = edit(cur_state, action, position)[:MAX_LEN]
-            ref_news.append(edited_state)
+            input_news.append(edited_state)
 
-    return ref_news
+    return input_news
 
-def update_replay_buffer_and_state(replay_buffer, state, actions, max_episode_reward, reward, best_cand_state, done):
+def update_replay_buffer_and_state(replay_buffer, state, action, max_episode_reward, reward, best_cand_state, done):
     accept=False
     if reward > max_episode_reward:
         max_episode_reward = reward
-        replay_buffer.push(state[0], actions[0], max_episode_reward, best_cand_state,done)
+        replay_buffer.push(state[0], action, max_episode_reward, best_cand_state,done)
         state = [best_cand_state]
         accept=True
     else:
@@ -161,7 +171,7 @@ def update_replay_buffer_and_state(replay_buffer, state, actions, max_episode_re
 def train(args,output_dir):
 
     # Setting seed for reproducibility
-    set_seed(args.seed)
+    # set_seed(args.seed)
     BSZ = args.bsz
     input_file = 'data/toy_train.txt'
     infer_file = output_dir + '_output.txt'
@@ -186,29 +196,30 @@ def train(args,output_dir):
 
             # generate a random input letter
             input_letter = random.choice(string.ascii_lowercase)
-            ref_olds=batch_data
+            input_olds=batch_data
 
-            state=[ref_olds]
+            state=[input_olds]
 
-            max_episode_reward = float('-inf')
+            max_episode_reward, _ = get_reward(state, input_letter)
             losses = []
 
             for step in range(args.max_steps):
 
-
                 # infer actions
-                epsilon = epsilons(idx)
-                actions = perform_action(agent, state, local_net, epsilon)
+                # epsilon = epsilons(idx)
+                # actions = perform_action(agent, state, local_net, epsilon)
 
-                ref_news=create_ref_news(state, actions, MAX_LEN)
+                # create input news
+                for action in range(3):
+                    input_news=create_input_news(state, action, MAX_LEN)
 
                 done = True if step == args.max_steps - 1 else False
 
                 # get max reward
                 cur_state=state[0]
-                reward, best_cand_state=get_reward(ref_news, input_letter)
+                reward, best_cand_state=get_reward(input_news, input_letter)
 
-                replay_buffer, state, max_episode_reward, accept = update_replay_buffer_and_state(replay_buffer, state, actions,
+                replay_buffer, state, max_episode_reward, accept = update_replay_buffer_and_state(replay_buffer, state, action,
                                                                                           max_episode_reward, reward,
                                                                                           best_cand_state,done)
                 # ------------------- update Q network ------------------- #
@@ -217,12 +228,15 @@ def train(args,output_dir):
 
                     print("loss is {:.6f}\t reward is {:.6f}, old_state is {}\taction is {},\tletter I wanna have is '{}'\t"
                           "the new state is {}\t accept is {}"
-                          .format(loss, reward, cur_state, str(actions[0].item()), input_letter, state[0], accept))
+                          .format(loss, reward, cur_state, str(action.item()), input_letter, state[0], accept))
                     logging.info("loss is {:.6f}\t reward is {:.6f}, old_state is {}\taction is {},\tletter I wanna have is '{}'"
                                  "\tthe new state is {}\t accept is {}"
-                          .format(loss, reward, cur_state, str(actions[0].item() ), input_letter, state[0], accept))
+                          .format(loss, reward, cur_state, str(action.item() ), input_letter, state[0], accept))
 
-
+                if is_all_letter(state[0], input_letter):
+                    print("I got the letter I want, the state is full of {} now.".format(input_letter))
+                    logging.info("I got the letter I want, the state is full of {} now.".format(input_letter))
+                    break
 
             #update output.txt
             for i in range(BSZ):
@@ -231,12 +245,9 @@ def train(args,output_dir):
                 f.write(state[0]+'\n')
                 f.flush()
 
-
-
-
 if __name__ == '__main__':
     args=get_args()
-    output_dir = 'results/'+args.output_dir
+    output_dir = 'results/'+args.ckpt_path
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
     train(args,output_dir)

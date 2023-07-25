@@ -41,10 +41,9 @@ class Agent(nn.Module):
 
         self.model=rbt_model
         self.tokenizer=rbt_tokenizer
-        self.state_dim = len(self.tokenizer.get_vocab())
+        self.state_dim = len(self.tokenizer.get_vocab()) # 50265
         self.num_actions = 3
         self.args=args
-        self.path=args.path
         self.device=device
 
     def text2emb(self, sent):

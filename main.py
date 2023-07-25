@@ -21,15 +21,14 @@ warnings.filterwarnings('ignore')
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 from transformers import RobertaTokenizer, RobertaForMaskedLM
-rbt_model = RobertaForMaskedLM.from_pretrained('roberta-large', return_dict=True).to(device)
-rbt_tokenizer = RobertaTokenizer.from_pretrained('roberta-large')
-print("loading roberta ...")
+
 
 # Function to initialize the model, network, replay buffer, optimizer and epsilon
 def initialize_model(args):
     
     rbt_model = RobertaForMaskedLM.from_pretrained('roberta-large', return_dict=True).to(device)
     rbt_tokenizer = RobertaTokenizer.from_pretrained('roberta-large')
+    print("loading roberta ...")
 
     editor = RobertaEditor(args, device, rbt_model, rbt_tokenizer).to(device)
     
@@ -46,8 +45,8 @@ def initialize_model(args):
 
     # epsilon-exploration for choosing an action
     epsilon_start = 1.0
-    epsilon_final = 0.01
-    epsilon_decay = 200
+    epsilon_final = 0.1
+    epsilon_decay = 1e3
 
     epsilons = lambda frame_idx: epsilon_final + (epsilon_start - epsilon_final) * math.exp(
         -1. * frame_idx / epsilon_decay)
@@ -151,8 +150,6 @@ def train(args,train_set):
     # load data
     train_data=load_data(train_set)
 
-    BSZ = args.bsz
-
     global_step = 0
 
     # training
@@ -173,11 +170,12 @@ def train(args,train_set):
 
         # ------------------- train Q network ------------------- #
         max_episode_reward = [0 for _ in range(len(input_olds))]
+        epsilon = epsilons(idx)
+
         for step in range(args.max_steps):
 
             torch.cuda.empty_cache()
 
-            epsilon = epsilons(idx)
             actions = agent.act(state, epsilon,local_net)
 
             input_news=create_input_news(args.bsz, state, actions, editor)
@@ -213,7 +211,6 @@ def train(args,train_set):
         if len(replay_buffer) >= args.buffer_size:
             loss, global_step = update_networks(agent, replay_buffer, local_net, target_net, optimizer, args,
                                                 global_step, losses)
-       
 
         if idx % 1 == 0:
             plot(idx, all_rewards, losses)

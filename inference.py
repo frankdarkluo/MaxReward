@@ -10,6 +10,8 @@ from dateutil import tz
 import torch
 from torch.utils.data import DataLoader
 from utils.dataset import TSTDataset
+from main import create_input_news, get_reward
+
 os.environ["TOKENIZERS_PARALLELISM"] = "true"
 tzone = tz.gettz('America/Edmonton')
 warnings.filterwarnings('ignore')
@@ -20,12 +22,10 @@ rbt_model = RobertaForMaskedLM.from_pretrained('roberta-large', return_dict=True
 rbt_tokenizer = RobertaTokenizer.from_pretrained('roberta-large')
 print("loading roberta ...")
 
-def infer(args, editor, scorer, agent):
-    set_seed(args.seed)
 
-    BSZ = args.bsz
-
-    infer_dir = 'results/' + args.path+'/'
+def load_data(args):
+    
+    infer_dir = 'results/' + args.ckpt_path+'/'
     if not os.path.exists(infer_dir):
         os.makedirs(infer_dir)
 
@@ -40,16 +40,25 @@ def infer(args, editor, scorer, agent):
 
     test_dataset=TSTDataset(args,'test')
     test_data=DataLoader(test_dataset,
-                          batch_size=BSZ,
+                          batch_size=args.bsz,
                           shuffle=False,
                           num_workers=4,
                           pin_memory=True)
+    
+    return test_data,infer_dir,infer_file
+
+def infer(args, editor, scorer, agent):
+
+    BSZ = args.bsz
+
+    test_data, infer_dir, infer_file=load_data(args)
 
     # start inference
     print("start inference...")
     with open(infer_file, 'w', encoding='utf8') as f:
 
         # load target model
+        # agent.state_dim=50265
         ckpt_path=os.path.join(infer_dir+str(args.ckpt_num)+'_target_net.pt')
         target_net = DQN(agent.state_dim, args.num_actions).to(device)
         target_net.load_state_dict(torch.load(ckpt_path))
@@ -61,12 +70,12 @@ def infer(args, editor, scorer, agent):
                 if idx != 0 and idx % 20 == 0:
                     print("inference batch: {}".format(idx))
                 batch_data=sorted(batch_data, key=lambda x: len(x.split()), reverse=True)
-                ref_olds=batch_data
+                input_olds=batch_data
                 batch_state_vec, _ = editor.state_vec(batch_data)
 
-                state=ref_olds
+                state=input_olds
 
-                max_episode_reward = [0 for _ in range(len(ref_olds))]
+                max_episode_reward = [0 for _ in range(len(input_olds))]
                 for step in range(args.max_steps):
                     # infer actions
                     with torch.no_grad():
@@ -75,41 +84,28 @@ def infer(args, editor, scorer, agent):
                         print("the q values for each action are",q_values)
                         logging.info("the action is {}".format(actions.item()))
 
-                    ref_news = []
-                    for idx in range(BSZ):
-                        state_words = state[idx].split()
-                        action=actions[idx]
-                        intermediate_results = []
-                        for positions in range(len(state_words)):
-                            edited_state = editor.edit([state[idx]], [action], [positions])
-                            intermediate_results+=edited_state
+                    input_news = create_input_news(args.bsz, state, actions, editor)
 
-                        ref_news.append(intermediate_results)
+                    # get editing results
+                    results = [scorer.scoring(input_news[i], [input_olds[i]], [batch_state_vec[i]])
+                                                                        for i in range(len(input_news))]
 
                     # get reward
-                    results = [scorer.scoring(ref_news[i], [ref_olds[i]], [batch_state_vec[i]])
-                                                                        for i in range(len(ref_news))]
+                    reward, best_cand_states = get_reward(results, input_news)
 
-                    index, ref_new_score, new_style_labels = zip(*results)
-
-                    temp_next_state = [ref_news[i][index[i]] for i in range(len(ref_news))]
-                    reward=list(ref_new_score)
-
-                    # update replay buffer
-                    # if ref_new_score>ref_old_score and reward> max_episode_reward:
-                    for i in range(len(ref_news)):
+                    for i in range(len(input_news)):
                         if reward[i]> max_episode_reward[i]:
                             max_episode_reward[i] = reward[i]
-                            state[i] = temp_next_state[i]
+                            state[i] = best_cand_states[i]
 
                 #update output.txt
                 for i in range(BSZ):
                     f.write(state[i]+'\n')
                     f.flush()
 
-
 def main():
     args = get_args()
+    set_seed(args.seed)
     editor = RobertaEditor(args, device, rbt_model, rbt_tokenizer).to(device)
     scorer = Scorer(args, editor, device).to(device)
     agent = Agent(args, device, rbt_model, rbt_tokenizer).to(device)
